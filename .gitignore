@@ -1,0 +1,8 @@
+/target/
+/.metals
+/.vscode
+/checkpoint
+/data
+
+*.log
+*.tmp
