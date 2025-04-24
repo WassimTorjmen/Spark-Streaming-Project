@@ -13,7 +13,7 @@ object Producer {
     "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
 
   def main(args: Array[String]): Unit = {
-    println("🔥 [Producer] Démarrage...")
+    println("[Producer] Démarrage...")
 
     val port = 9999
     val jsonPath = "data/response.json"
@@ -69,7 +69,7 @@ object Producer {
 
       // Extraire les produits
         val rows = json("rows").arr
-        println(s"🔎 [API] ${rows.length} produits trouvés à offset $offset")
+        println(s"[API] ${rows.length} produits trouvés à offset $offset")
 
         rows.foreach { r =>
           val productJson = r("row") // <- l'objet produit
