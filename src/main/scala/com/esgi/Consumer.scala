@@ -1,4 +1,5 @@
 package com.esgi
+
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
@@ -20,13 +21,18 @@ object Consumer {
       .option("port", 9999)
       .load()
 
-    // Traitement : ici on affiche juste les lignes reçues
-    val lines = df.withColumn("timestamp", current_timestamp())
+    // Nettoyage / filtrage des lignes vides ou trop courtes
+    val filtered = df.filter(length(col("value")) > 10)
 
-    val query = lines.writeStream
+    // Affichage brut ligne par ligne
+    val query = filtered.writeStream
       .outputMode("append")
-      .format("console")
-      .option("truncate", false)
+      .foreachBatch { (batchDF: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row], batchId: Long) =>
+        batchDF.collect().foreach { row =>
+          val line = row.getString(0)
+          println(s"[REÇU] $line")
+        }
+      }
       .option("checkpointLocation", "D:/ESGI/Spark Streaming/spark-streaming-project/checkpoint")
       .start()
 

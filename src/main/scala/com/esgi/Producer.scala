@@ -1,38 +1,111 @@
 package com.esgi
+import ujson._
 
 import java.io._
 import java.net._
 import scala.io.Source
-import scala.concurrent._
-import scala.concurrent.duration._
-import ExecutionContext.Implicits.global
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
 
 object Producer {
 
+  val apiBaseUrl =
+    "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+
   def main(args: Array[String]): Unit = {
+    println("🔥 [Producer] Démarrage...")
+
     val port = 9999
-    val filePath = "data/response.json"
+    val jsonPath = "data/response.json"
+    val useAPI = true // ← change à true pour utiliser l’API
 
-    // Créer le serveur socket
-    val serverSocket = new ServerSocket(port)
-    println(s"✅ Serveur socket lancé sur le port $port, en attente de connexion...")
+    try {
+      val serverSocket = new ServerSocket(port)
+      println(s"[Producer] Socket lancé sur le port $port. En attente de client...")
 
-    val socket = serverSocket.accept()
-    println("🚀 Client connecté ! Envoi des données en cours...")
+      val socket = serverSocket.accept()
+      println("[Producer] Client connecté. Début de l’envoi...")
 
-    val out = new PrintWriter(socket.getOutputStream, true)
+      val out = new PrintWriter(socket.getOutputStream, true)
 
-    // Lire le fichier ligne par ligne et simuler l'envoi
-    for (line <- Source.fromFile(filePath).getLines()) {
-      out.println(line)
-      println(s"[SEND] $line")
-      Thread.sleep(1000) // Simule 1 ligne par seconde
+      if (useAPI) {
+        println("[Producer] Mode API activé")
+        streamFromAPI(out)
+      } else {
+        println("[Producer] Lecture locale du fichier JSON")
+        streamFromJsonFile(out, jsonPath)
+      }
+
+      println("[Producer] Envoi terminé. Le Producer reste actif.")
+      while (true) Thread.sleep(1000)
+
+    } catch {
+      case e: Exception =>
+        println(s"[Producer] Exception : ${e.getMessage}")
+        e.printStackTrace()
     }
+  }
 
-    println("✅ Tous les messages ont été envoyés !")
-    out.close()
-    socket.close()
-    serverSocket.close()
+  def streamFromAPI(out: PrintWriter): Unit = {
+    var offset = 0
+    val length = 100
+    val maxOffset = 3808300
+
+    try {
+      while (offset <= maxOffset) {
+        val url = s"$apiBaseUrl&offset=$offset&length=$length"
+        println(s"[API] Requête : $url")
+
+        val connection = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
+        connection.setRequestMethod("GET")
+        connection.setConnectTimeout(5000)
+        connection.setReadTimeout(5000)
+
+        val is = connection.getInputStream
+        val content = Source.fromInputStream(is).mkString
+        is.close()
+
+        val json = ujson.read(content)
+
+      // Extraire les produits
+        val rows = json("rows").arr
+        println(s"🔎 [API] ${rows.length} produits trouvés à offset $offset")
+
+        rows.foreach { r =>
+          val productJson = r("row") // <- l'objet produit
+          val line = productJson.toString()
+          out.println(line)
+          println(s"[SEND API] $line")
+          Thread.sleep(500)
+        }
+
+      offset += length
+      }
+    } catch {
+      case e: Exception =>
+        println(s"[API] Erreur : ${e.getMessage}")
+    }
+  }
+
+  def streamFromJsonFile(out: PrintWriter, path: String): Unit = {
+    try {
+      val spark = SparkSession.builder()
+        .appName("JsonFileProducer")
+        .master("local[*]")
+        .getOrCreate()
+
+      val df = spark.read.json(path)
+
+      df.collect().foreach { row =>
+        out.println(row.toString())
+        println(s"[SEND FILE] ${row.toString()}")
+        Thread.sleep(500)
+      }
+
+      spark.stop()
+    } catch {
+      case e: Exception =>
+        println(s"[FILE] Erreur lors de la lecture : ${e.getMessage}")
+    }
   }
 }
-
