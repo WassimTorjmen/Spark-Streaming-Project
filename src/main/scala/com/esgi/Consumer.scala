@@ -28,10 +28,10 @@ object Consumer {
     val query = filtered.writeStream
       .outputMode("append")
       .foreachBatch { (batchDF: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row], batchId: Long) =>
-        batchDF.collect().foreach { row =>
-          val line = row.getString(0)
-          println(s"[REÇU] $line")
-        }
+        batchDF.write
+          .format("console")
+          .option("truncate", "false")
+          .save()
       }
       .option("checkpointLocation", "D:/ESGI/Spark Streaming/spark-streaming-project/checkpoint")
       .start()

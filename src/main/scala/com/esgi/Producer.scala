@@ -1,111 +1,102 @@
 package com.esgi
-import ujson._
 
-import java.io._
-import java.net._
 import scala.io.Source
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions._
+import java.net.{ServerSocket, Socket}
+import java.io.PrintWriter
+import ujson._
 
 object Producer {
 
-  val apiBaseUrl =
-    "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+  val baseUrl = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
 
   def main(args: Array[String]): Unit = {
-    println("[Producer] Démarrage...")
+    println(" [ProducerSocket] Démarrage...")
 
-    val port = 9999
+    val useAPI = true
     val jsonPath = "data/response.json"
-    val useAPI = true // ← change à true pour utiliser l’API
+    val batchLength = 100 // nombre de lignes par requête
+    val maxOffset = 1000 // pour tester (mets 3808300 plus tard)
 
     try {
-      val serverSocket = new ServerSocket(port)
-      println(s"[Producer] Socket lancé sur le port $port. En attente de client...")
+      val serverSocket = new ServerSocket(9999)
+      println(" [ProducerSocket] Socket lancé sur le port 9999, en attente d'un client...")
 
-      val socket = serverSocket.accept()
-      println("[Producer] Client connecté. Début de l’envoi...")
+      val socket: Socket = serverSocket.accept()
+      println(" [ProducerSocket] Client connecté ! Début du streaming...")
 
       val out = new PrintWriter(socket.getOutputStream, true)
 
       if (useAPI) {
-        println("[Producer] Mode API activé")
-        streamFromAPI(out)
+        // Pagination sur l'API
+        var offset = 0
+        while (offset <= maxOffset) {
+          val url = s"$baseUrl&offset=$offset&length=$batchLength"
+          println(s" [API] Requête : $url")
+
+          val products = fetchRowsFromAPI(url)
+          if (products.isEmpty) {
+            println(s" [ProducerSocket] Aucun produit trouvé à offset $offset. Arrêt.")
+            offset = maxOffset + 1
+          } else {
+            products.foreach { product =>
+              val line = product.render()
+              out.println(line)
+              println(s"[SEND API] $line")
+              Thread.sleep(1000)
+            }
+            offset += batchLength
+          }
+        }
       } else {
-        println("[Producer] Lecture locale du fichier JSON")
-        streamFromJsonFile(out, jsonPath)
+        // Lecture d'un fichier local JSON
+        val products = fetchRowsFromFile(jsonPath)
+        products.foreach { product =>
+          val line = product.render()
+          out.println(line)
+          println(s"[SEND FILE] $line")
+          Thread.sleep(1000)
+        }
       }
 
-      println("[Producer] Envoi terminé. Le Producer reste actif.")
+      println(" [ProducerSocket] Tous les produits envoyés.")
       while (true) Thread.sleep(1000)
 
     } catch {
       case e: Exception =>
-        println(s"[Producer] Exception : ${e.getMessage}")
+        println(s" [ProducerSocket] Exception : ${e.getMessage}")
         e.printStackTrace()
     }
   }
 
-  def streamFromAPI(out: PrintWriter): Unit = {
-    var offset = 0
-    val length = 100
-    val maxOffset = 3808300
-
+  def fetchRowsFromAPI(url: String): Seq[Value] = {
     try {
-      while (offset <= maxOffset) {
-        val url = s"$apiBaseUrl&offset=$offset&length=$length"
-        println(s"[API] Requête : $url")
+      val connection = new java.net.URL(url).openConnection().asInstanceOf[java.net.HttpURLConnection]
+      connection.setRequestMethod("GET")
+      connection.setConnectTimeout(5000)
+      connection.setReadTimeout(5000)
 
-        val connection = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
-        connection.setRequestMethod("GET")
-        connection.setConnectTimeout(5000)
-        connection.setReadTimeout(5000)
+      val is = connection.getInputStream
+      val content = Source.fromInputStream(is).mkString
+      is.close()
 
-        val is = connection.getInputStream
-        val content = Source.fromInputStream(is).mkString
-        is.close()
-
-        val json = ujson.read(content)
-
-      // Extraire les produits
-        val rows = json("rows").arr
-        println(s"[API] ${rows.length} produits trouvés à offset $offset")
-
-        rows.foreach { r =>
-          val productJson = r("row") // <- l'objet produit
-          val line = productJson.toString()
-          out.println(line)
-          println(s"[SEND API] $line")
-          Thread.sleep(500)
-        }
-
-      offset += length
-      }
+      val json = ujson.read(content)
+      json("rows").arr.map(_("row"))
     } catch {
       case e: Exception =>
-        println(s"[API] Erreur : ${e.getMessage}")
+        println(s" [API] Erreur de lecture : ${e.getMessage}")
+        Seq.empty
     }
   }
 
-  def streamFromJsonFile(out: PrintWriter, path: String): Unit = {
+  def fetchRowsFromFile(path: String): Seq[Value] = {
     try {
-      val spark = SparkSession.builder()
-        .appName("JsonFileProducer")
-        .master("local[*]")
-        .getOrCreate()
-
-      val df = spark.read.json(path)
-
-      df.collect().foreach { row =>
-        out.println(row.toString())
-        println(s"[SEND FILE] ${row.toString()}")
-        Thread.sleep(500)
-      }
-
-      spark.stop()
+      val content = Source.fromFile(path).mkString
+      val json = ujson.read(content)
+      json("rows").arr.map(_("row"))
     } catch {
       case e: Exception =>
-        println(s"[FILE] Erreur lors de la lecture : ${e.getMessage}")
+        println(s" [FILE] Erreur de lecture : ${e.getMessage}")
+        Seq.empty
     }
   }
 }
