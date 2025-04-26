@@ -3,6 +3,7 @@
 /.vscode
 /checkpoint
 /data
+/pom.xml
 
 *.log
 *.tmp
