@@ -33,7 +33,7 @@ object Consumer {
           .option("truncate", "false")
           .save()
       }
-      .option("checkpointLocation", "D:/ESGI/Spark Streaming/spark-streaming-project/checkpoint")
+      .option("checkpointLocation", "C:/Users/Abdellatif/Desktop/Spark-Streaming-Project/checkpoint")
       .start()
 
     query.awaitTermination()
