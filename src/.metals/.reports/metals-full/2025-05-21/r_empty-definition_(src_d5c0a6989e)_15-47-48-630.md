@@ -1,7 +1,21 @@
+error id: file://<WORKSPACE>/main/scala/com/esgi/Producer.scala:spark.
+file://<WORKSPACE>/main/scala/com/esgi/Producer.scala
+empty definition using pc, found symbol in pc: spark.
+semanticdb not found
+empty definition using fallback
+non-local guesses:
+	 -org/apache/spark/sql/types/org/apache/spark.
+	 -ujson/org/apache/spark.
+	 -org/apache/spark.
+	 -scala/Predef.org.apache.spark.
+offset: 92
+uri: file://<WORKSPACE>/main/scala/com/esgi/Producer.scala
+text:
+```scala
 package com.esgi
 
 import org.apache.spark.sql.{SparkSession, DataFrame}
-import org.apache.spark.sql.functions._
+import org.apache.sp@@ark.sql.functions._
 import org.apache.spark.sql.types._
 import scala.io.Source
 import java.io.PrintWriter
@@ -85,3 +99,10 @@ object ProducerSpark {
     out.close()
   }
 }
+
+```
+
+
+#### Short summary: 
+
+empty definition using pc, found symbol in pc: spark.
