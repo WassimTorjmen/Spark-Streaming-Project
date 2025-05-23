@@ -1,102 +1,104 @@
 package com.esgi
 
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
+import java.util.Properties
+import java.net.{URL, HttpURLConnection}
 import scala.io.Source
-import java.net.{ServerSocket, Socket}
-import java.io.PrintWriter
 import ujson._
 
-object Producer {
+object ProducerKafka {
 
-  val baseUrl = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+  val baseUrl =
+    "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
 
   def main(args: Array[String]): Unit = {
-    println(" [ProducerSocket] Démarrage...")
 
-    val useAPI = true
-    val jsonPath = "data/response.json"
-    val batchLength = 100 // nombre de lignes par requête
-    val maxOffset = 1000 // pour tester (mets 3808300 plus tard)
+    /* --------- Paramètres --------- */
+    val useAPI      = true          // false ⇒ lit food.parquet
+    val jsonPath    = "data/food.parquet" // fichier de teste 
+    val batchLength = 100
+    val maxOffset   = 3808300          // pour tester après on fait 3808300 ensuite
+    val topic       = "openfood"
 
-    try {
-      val serverSocket = new ServerSocket(9999)
-      println(" [ProducerSocket] Socket lancé sur le port 9999, en attente d'un client...")
+    /*Config Kafka */
+    val props = new Properties()
+    props.put("bootstrap.servers", "localhost:9092")
+    props.put("key.serializer",
+              "org.apache.kafka.common.serialization.StringSerializer")
+              props.put("value.serializer",
+              "org.apache.kafka.common.serialization.StringSerializer")
+   props.put("max.request.size", "2000000")
 
-      val socket: Socket = serverSocket.accept()
-      println(" [ProducerSocket] Client connecté ! Début du streaming...")
+    val producer = new KafkaProducer[String, String](props)
+    println("Producer Kafka – démarrage")
 
-      val out = new PrintWriter(socket.getOutputStream, true)
+  
+    if (useAPI) {
+      var offset = 0
+      while (offset <= maxOffset) {
+        val url   = s"$baseUrl&offset=$offset&length=$batchLength"
+        val batch = fetchBatchFromAPI(url)          // JSON brut
 
-      if (useAPI) {
-        // Pagination sur l'API
-        var offset = 0
-        while (offset <= maxOffset) {
-          val url = s"$baseUrl&offset=$offset&length=$batchLength"
-          println(s" [API] Requête : $url")
-
-          val products = fetchRowsFromAPI(url)
-          if (products.isEmpty) {
-            println(s" [ProducerSocket] Aucun produit trouvé à offset $offset. Arrêt.")
-            offset = maxOffset + 1
-          } else {
-            products.foreach { product =>
-              val line = product.render()
-              out.println(line)
-              println(s"[SEND API] $line")
-              Thread.sleep(1000)
-            }
-            offset += batchLength
-          }
+        if (batch.nonEmpty) {
+          producer.send(new ProducerRecord(topic, null, batch))
+          println(s"Batch offset=$offset envoyé (${batch.length} chars)")
+          // preview des données
+          val preview = if (batch.length > 200) batch.take(200) + "..." else batch
+          println(s"🟢 Batch offset=$offset envoyé  (${batch.length} chars)")
+          println(s"   ↳ Aperçu : $preview\n")
+          //reduire le temps d'attente
+          Thread.sleep(2000)
+        } else {
+          println(s"API vide à offset $offset, arrêt.")
         }
-      } else {
-        // Lecture d'un fichier local JSON
-        val products = fetchRowsFromFile(jsonPath)
-        products.foreach { product =>
-          val line = product.render()
-          out.println(line)
-          println(s"[SEND FILE] $line")
-          Thread.sleep(1000)
-        }
+        offset += batchLength
+        Thread.sleep(2000)
       }
-
-      println(" [ProducerSocket] Tous les produits envoyés.")
-      while (true) Thread.sleep(1000)
-
-    } catch {
-      case e: Exception =>
-        println(s" [ProducerSocket] Exception : ${e.getMessage}")
-        e.printStackTrace()
+    } else {
+      fetchBatchesFromFile(jsonPath).foreach { batch =>
+        producer.send(new ProducerRecord(topic, null, batch))
+        println(s"Batch fichier envoyé (${batch.length} chars)")
+        Thread.sleep(1000)
+      }
     }
+
+    producer.flush()
+    producer.close()
+    println(" Fin d’envoi – producer Kafka fermé.")
   }
 
-  def fetchRowsFromAPI(url: String): Seq[Value] = {
-    try {
-      val connection = new java.net.URL(url).openConnection().asInstanceOf[java.net.HttpURLConnection]
-      connection.setRequestMethod("GET")
-      connection.setConnectTimeout(5000)
-      connection.setReadTimeout(5000)
+  /* Helpers*/
 
-      val is = connection.getInputStream
-      val content = Source.fromInputStream(is).mkString
+  /** Télécharge un bloc JSON (100 lignes) et renvoie la chaîne brute. */
+  def fetchBatchFromAPI(url: String): String = {
+    try {
+      val conn = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
+      conn.setConnectTimeout(5000)
+      conn.setReadTimeout(5000)
+
+      val is   = conn.getInputStream
+      val json = Source.fromInputStream(is).mkString
       is.close()
-
-      val json = ujson.read(content)
-      json("rows").arr.map(_("row"))
+      json
     } catch {
       case e: Exception =>
-        println(s" [API] Erreur de lecture : ${e.getMessage}")
-        Seq.empty
+        println(s" API error : ${e.getMessage}")
+        ""
     }
   }
 
-  def fetchRowsFromFile(path: String): Seq[Value] = {
+  /** Découpe un fichier local en blocs JSON de 100 produits. */
+  def fetchBatchesFromFile(path: String): Vector[String] = {
     try {
-      val content = Source.fromFile(path).mkString
-      val json = ujson.read(content)
-      json("rows").arr.map(_("row"))
+      val raw   = Source.fromFile(path).mkString
+      val root  = ujson.read(raw)
+      // à enlever 
+      val rows  = root("rows").arr.map(_("row"))
+      rows.grouped(100).map(g => ujson.Arr(g: _*).render()).toVector
     } catch {
       case e: Exception =>
-        println(s" [FILE] Erreur de lecture : ${e.getMessage}")
-        Seq.empty
+        println(s" File error : ${e.getMessage}")
+        Vector.empty
     }
   }
 }
