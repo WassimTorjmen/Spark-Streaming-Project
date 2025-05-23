@@ -49,6 +49,26 @@
       <artifactId>ujson_2.12</artifactId>
       <version>3.1.0</version>
     </dependency>
+    
+    <!-- client Kafka “bas-niveau” -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>3.5.1</version>
+    </dependency>
+
+    <!-- connecteur Spark ↔ Kafka (Structured Streaming) -->
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql-kafka-0-10_2.12</artifactId>
+      <version>3.5.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>1.7.36</version>
+    </dependency>
+
   </dependencies>
 
   <build>
@@ -73,9 +93,6 @@
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.1.0</version>
-        <configuration>
-          <mainClass>com.esgi.Main</mainClass> <!-- à adapter à ton code -->
-        </configuration>
       </plugin>
     </plugins>
   </build>
