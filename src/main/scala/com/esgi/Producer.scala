@@ -1,48 +1,100 @@
 package com.esgi
 
+import scala.io.Source
+import java.net.{ServerSocket, Socket}
 import java.io.PrintWriter
-import java.net.ServerSocket
-import org.apache.spark.sql.SparkSession
+import ujson._
 
 object Producer {
 
+  val baseUrl = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+
   def main(args: Array[String]): Unit = {
-    val port = 9999
-    val filePath = "data/response.json"
+    println(" [ProducerSocket] Démarrage...")
 
-    // Création SparkSession
-    val spark = SparkSession.builder()
-      .appName("Producer")
-      .master("local[*]")
-      .getOrCreate()
+    val useAPI = true
+    val jsonPath = "data/response.json"
+    val batchLength = 100
+    val maxOffset = 1000
 
-    // Lecture du fichier avec Spark
-    val df = spark.read.text(filePath)
+    try {
+      val serverSocket = new ServerSocket(9999)
+      println(" [ProducerSocket] Socket lancé sur le port 9999, en attente d'un client...")
 
-    // Création serveur socket classique
-    val serverSocket = new ServerSocket(port)
-    println(s"Serveur socket lancé sur le port $port, en attente de connexion...")
+      val socket: Socket = serverSocket.accept()
+      println(" [ProducerSocket] Client connecté ! Début du streaming...")
 
-    val socket = serverSocket.accept()
-    println("Client connecté ! Envoi des données en cours...")
+      val out = new PrintWriter(socket.getOutputStream, true)
 
-    val out = new PrintWriter(socket.getOutputStream, true)
+      if (useAPI) {
+        var offset = 0
+        while (offset <= maxOffset) {
+          val url = s"$baseUrl&offset=$offset&length=$batchLength"
+          println(s" [API] Requête : $url")
 
-    // Parcours paresseux des lignes du fichier avec toLocalIterator (évite collect())
-    val iterator = df.toLocalIterator()
+          val products = fetchRowsFromAPI(url)
+          if (products.isEmpty) {
+            println(s" [ProducerSocket] Aucun produit trouvé à offset $offset. Arrêt.")
+            offset = maxOffset + 1
+          } else {
+            products.foreach { product =>
+              val line = product.render()
+              out.println(line)
+              println(s"[SEND API] $line")
+              Thread.sleep(1000) // 1 ligne/sec pour Spark Streaming
+            }
+            offset += batchLength
+          }
+        }
+      } else {
+        val products = fetchRowsFromFile(jsonPath)
+        products.foreach { product =>
+          val line = product.render()
+          out.println(line)
+          println(s"[SEND FILE] $line")
+          Thread.sleep(1000)
+        }
+      }
 
-    while (iterator.hasNext) {
-      val line = iterator.next().getString(0)
-      out.println(line)
-      println(s"[SEND] $line")
-      Thread.sleep(1000) // envoie une ligne par seconde
+      println(" [ProducerSocket] Tous les produits envoyés. Le serveur continue de tourner pour maintenir la connexion.")
+      while (true) Thread.sleep(1000) // permet au consumer Spark de ne pas crasher
+
+    } catch {
+      case e: Exception =>
+        println(s" [ProducerSocket] Exception : ${e.getMessage}")
+        e.printStackTrace()
     }
+  }
 
-    println("Tous les messages ont été envoyés !")
-    out.close()
-    socket.close()
-    serverSocket.close()
+  def fetchRowsFromAPI(url: String): Seq[Value] = {
+    try {
+      val connection = new java.net.URL(url).openConnection().asInstanceOf[java.net.HttpURLConnection]
+      connection.setRequestMethod("GET")
+      connection.setConnectTimeout(5000)
+      connection.setReadTimeout(5000)
 
-    spark.stop()
+      val is = connection.getInputStream
+      val content = Source.fromInputStream(is).mkString
+      is.close()
+
+      val json = ujson.read(content)
+      json("rows").arr.map(_("row"))
+    } catch {
+      case e: Exception =>
+        println(s" [API] Erreur de lecture : ${e.getMessage}")
+        Seq.empty
+    }
+  }
+
+  def fetchRowsFromFile(path: String): Seq[Value] = {
+    try {
+      val content = Source.fromFile(path).mkString
+      val json = ujson.read(content)
+      json("rows").arr.map(_("row"))
+    } catch {
+      case e: Exception =>
+        println(s" [FILE] Erreur de lecture : ${e.getMessage}")
+        Seq.empty
+    }
   }
 }
