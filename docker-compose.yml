@@ -1,0 +1,99 @@
+version: "3.9"
+
+###############################################################################
+# Réseau commun
+###############################################################################
+networks:
+  data: {}
+
+###############################################################################
+# Volumes persistants
+###############################################################################
+volumes:
+  zkdata:        {}              # état ZooKeeper
+  kafka-logs:    {}              # logs + segments du broker
+  pgdata:        {}              # données PostgreSQL
+  checkpoint:    {}              # checkpoints Spark Streaming
+
+###############################################################################
+# Services
+###############################################################################
+services:
+  # -------------------------------------------------------------------------
+  # 1. ZooKeeper (image maison)
+  # -------------------------------------------------------------------------
+  zookeeper:
+    build: ./Infra/zookeeper
+    container_name: zookeeper
+    networks: [data]
+    volumes:
+      - zkdata:/data
+    expose: ["2181"]
+
+  # -------------------------------------------------------------------------
+  # 2. Broker Kafka (image maison)
+  # -------------------------------------------------------------------------
+  kafka:
+    build: ./Infra/kafka
+    container_name: kafka
+    depends_on: [zookeeper]
+    networks: [data]
+    volumes:
+      - kafka-logs:/tmp/kafka-logs
+    ports:
+      - "9092:9092"            # accès depuis ta machine hôte
+    environment:
+      - KAFKA_TOPICS=openfood:1:1   # topic auto-créé par l'entrypoint
+
+  # -------------------------------------------------------------------------
+  # 3. PostgreSQL (image maison)
+  # -------------------------------------------------------------------------
+  postgres:
+    build: ./Infra/postgres
+    container_name: postgres
+    networks: [data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=openfood
+      - POSTGRES_USER=ingest
+      - POSTGRES_PASSWORD=ingestpwd
+
+  # -------------------------------------------------------------------------
+  # 4. Producer (API → Kafka)
+  # -------------------------------------------------------------------------
+  producer:
+    build:
+      context: .
+      dockerfile: src/main/scala/com/esgi/Producer/Dockerfile
+    container_name: producer
+    depends_on: [kafka]
+    networks: [data]
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - USE_API=true                  # false ⇒ lit un Parquet local
+      - BATCH_LENGTH=100
+      - MAX_OFFSET=3808300
+    volumes:
+      - ./data:/app/data              # si tu lis localement response.json
+
+  # -------------------------------------------------------------------------
+  # 5. Consumer (Kafka → console / PostgreSQL)
+  # -------------------------------------------------------------------------
+  consumer:
+    build:
+      context: .
+      dockerfile: src/main/scala/com/esgi/Consumer/Dockerfile
+    container_name: consumer
+    depends_on: [kafka, postgres]
+    networks: [data]
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CHECKPOINT_PATH=/checkpoint/generic
+      - PG_URL=jdbc:postgresql://postgres:5432/openfood
+      - PG_USER=ingest
+      - PG_PWD=ingestpwd
+    volumes:
+      - checkpoint:/checkpoint

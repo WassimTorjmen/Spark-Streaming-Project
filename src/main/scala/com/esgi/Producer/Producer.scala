@@ -47,12 +47,12 @@ object ProducerKafka {
           println(s"🟢 Batch offset=$offset envoyé  (${batch.length} chars)")
           println(s"   ↳ Aperçu : $preview\n")
           //reduire le temps d'attente
-          Thread.sleep(2000)
+          Thread.sleep(500)
         } else {
           println(s"API vide à offset $offset, arrêt.")
         }
         offset += batchLength
-        Thread.sleep(2000)
+        Thread.sleep(500)
       }
     } else {
       fetchBatchesFromFile(jsonPath).foreach { batch =>

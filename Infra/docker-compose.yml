@@ -1,0 +1,67 @@
+version: "3.9"
+
+###############################################################################
+# Réseau unique : tous les conteneurs se résolvent par leur nom (kafka, …)
+###############################################################################
+networks:
+  data: {}
+
+###############################################################################
+# Volumes persistants : logs Kafka, données ZooKeeper, base PostgreSQL
+###############################################################################
+volumes:
+  zkdata:       {}
+  kafka-logs:   {}
+  pgdata:       {}
+
+###############################################################################
+# Services infrastructure
+###############################################################################
+services:
+  # -------------------------------------------------------------------------
+  # 1. ZooKeeper
+  # -------------------------------------------------------------------------
+  zookeeper:
+    build: ./zookeeper               # ⇢ infra/zookeeper/Dockerfile
+    container_name: zookeeper
+    networks: [data]
+    volumes:
+      - zkdata:/data                 # dataDir pour ZK
+    environment:
+      - ZOO_PORT=2181
+    ports:
+      - "2181:2181"                  # accès depuis le poste hôte (optionnel)
+
+  # -------------------------------------------------------------------------
+  # 2. Broker Kafka (connecté à ZooKeeper)
+  # -------------------------------------------------------------------------
+  kafka:
+    build: ./kafka                   # ⇢ infra/kafka/Dockerfile
+    container_name: kafka
+    depends_on: [zookeeper]
+    networks: [data]
+    volumes:
+      - kafka-logs:/tmp/kafka-logs   # logs & données du broker
+    ports:
+      - "9092:9092"                  # PLAINTEXT exposé
+    environment:
+      # topics créés automatiquement par kafka-entrypoint.sh
+      - KAFKA_TOPICS=openfood:1:1            # format  nom:partitions:réplication
+      # si tu veux d’autres topics :
+      # - KAFKA_TOPICS=openfood:1:1,metrics:3:1
+
+  # -------------------------------------------------------------------------
+  # 3. PostgreSQL (base cible)
+  # -------------------------------------------------------------------------
+  postgres:
+    build: ./postgres                # ⇢ infra/postgres/Dockerfile
+    container_name: postgres
+    networks: [data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=openfood
+      - POSTGRES_USER=ingest
+      - POSTGRES_PASSWORD=ingestpwd
