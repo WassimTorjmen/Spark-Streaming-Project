@@ -25,7 +25,7 @@ WORKDIR /app
 
 # Jar produit
 #COPY --from=builder /build/target/*-shaded.jar /app/producer.jar
-COPY --from=builder /build/target/*-shaded.jar /app/producer.jar
+COPY --from=builder /build/target/spark-streaming-project-1.0-SNAPSHOT.jar /app/producer.jar
 
 
 ENV KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \

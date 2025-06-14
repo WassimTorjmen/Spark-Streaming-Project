@@ -19,10 +19,12 @@ object ProducerKafka {
     val batchLength = 100
     val maxOffset   = 3808300          // pour tester après on fait 3808300 ensuite
     val topic       = "openfood"
+    val bootstrap = sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
     /*Config Kafka */
     val props = new Properties()
-    props.put("bootstrap.servers", "localhost:9092")
+    props.put("bootstrap.servers", bootstrap)
+    
     props.put("key.serializer",
               "org.apache.kafka.common.serialization.StringSerializer")
               props.put("value.serializer",
