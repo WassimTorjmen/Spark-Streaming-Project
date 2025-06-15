@@ -1,10 +1,12 @@
 package com.esgi
 
-import scala.io.Source
-import java.io.{File, PrintWriter}
-import ujson._
+import org.apache.spark.sql.{SparkSession, DataFrame, SaveMode, Column, Row}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+import scala.util.{Try, Success, Failure}
 
 object FetchAndTransform {
+
   case class PackagingInfo(
     material: String,
     shape: String,
@@ -12,196 +14,260 @@ object FetchAndTransform {
     quantity: Option[String]
   )
 
-  case class NutritionalInfo(
-    code: String,
-    product_name: String,
-    brands: String,
-    nutriscore_grade: String,
-    nutriscore_score: Int,
-    energy_kcal: Double,
-    fat: Double,
-    saturated_fat: Double,
-    carbohydrates: Double,
-    sugars: Double,
-    proteins: Double,
-    salt: Double,
-    cocoa_percentage: Option[Double],
-    allergens: List[String],
-    labels: List[String],
-    categories: List[String],
-    packaging: List[PackagingInfo]
-  )
+  val API_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+  val DB_URL = "jdbc:postgresql://localhost:5433/food_analysis"
+  val DB_USER = "postgres"
+  val DB_PASSWORD = "postgres"
 
   def main(args: Array[String]): Unit = {
-    try {
-      val baseUrl = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
-      val offset = 0
-      val length = 5
-      val url = s"$baseUrl&offset=$offset&length=$length"
+    val spark = Try {
+      SparkSession.builder()
+        .appName("FetchAndTransformSpark")
+        .master("local[*]")
+        .getOrCreate()
+    } match {
+      case Success(session) => session
+      case Failure(e) =>
+        println(s"Failed to create Spark session: ${e.getMessage}")
+        sys.exit(1)
+    }
 
-      println(s"Fetching data from URL: $url")
-      val jsonString = Source.fromURL(url).mkString
-      val json = ujson.read(jsonString)
-      val rows = json("rows").arr
+    import spark.implicits._
 
-      val cleanedData = rows.map { row =>
-        val rowData = row("row").obj
-        
-        // Helper functions with safer access
-        def getStr(data: Obj, key: String): String = 
-          data.value.get(key).map {
-            case s: Str => s.str
-            case _ => ""
-          }.getOrElse("")
-          
-        def getInt(data: Obj, key: String): Int = 
-          data.value.get(key).map {
-            case n: Num => n.num.toInt
-            case _ => 0
-          }.getOrElse(0)
-          
-        def getList(data: Obj, key: String): List[String] = 
-          data.value.get(key).map {
-            case a: Arr => a.arr.map {
-              case s: Str => s.str.replaceAll("(en:|fr:)", "")
-              case _ => ""
-            }.toList
-            case _ => List.empty
-          }.getOrElse(List.empty)
-        
-        // Product info
-        val code = getStr(rowData, "code")
-        val productName = rowData.value.get("product_name").map {
-          case names: Arr => names.arr.collectFirst {
-            case obj: Obj if obj.value.get("lang").exists {
-              case s: Str => s.str == "fr"
-              case _ => false
-            } => obj.value.get("text").collect {
-              case s: Str => s.str
-            }.getOrElse("")
-          }.getOrElse(names.arr.headOption.flatMap {
-            case obj: Obj => obj.value.get("text").collect {
-              case s: Str => s.str
-            }
-            case _ => None
-          }.getOrElse(""))
-          case _ => ""
-        }.getOrElse("")
-        
-        val brands = getStr(rowData, "brands")
-        val nutriscoreGrade = getStr(rowData, "nutriscore_grade")
-        val nutriscoreScore = getInt(rowData, "nutriscore_score")
-        
-        // Nutrition data - fixed extraction
-        val nutriments = rowData.value.get("nutriments").collect {
-          case a: Arr => a.arr.flatMap {
-            case o: Obj => Some(o)
-            case _ => None
-          }
-          case _ => List.empty[Obj]
-        }.getOrElse(List.empty)
-        
-        def getNutrientValue(name: String): Double = {
-          nutriments.find(_.value.get("name").exists {
-            case s: Str => s.str == name
-            case _ => false
-          }).flatMap(_.value.get("100g").collect {
-            case n: Num => n.num
-            case s: Str => try { s.str.toDouble } catch { case _: Exception => 0.0 }
-            case _ => 0.0
-          }).getOrElse(0.0)
-        }
-        
-        def getOptNutrientValue(name: String): Option[Double] = {
-          nutriments.find(_.value.get("name").exists {
-            case s: Str => s.str == name
-            case _ => false
-          }).flatMap(_.value.get("100g").collect {
-            case n: Num => Some(n.num)
-            case s: Str => try { Some(s.str.toDouble) } catch { case _: Exception => None }
-            case _ => None
-          }).flatten
-        }
-        
-        // Packaging info
-        val packagings = rowData.value.get("packagings").map {
-          case a: Arr => a.arr.collect {
-            case o: Obj => 
-              PackagingInfo(
-                material = o.value.get("material").collect { case s: Str => s.str }.getOrElse(""),
-                shape = o.value.get("shape").collect { case s: Str => s.str }.getOrElse(""),
-                recycling = o.value.get("recycling").collect { case s: Str => s.str }.getOrElse(""),
-                quantity = o.value.get("quantity_per_unit").collect { case s: Str => Some(s.str) }.getOrElse(None)
-              )
-          }.toList
-          case _ => List.empty
-        }.getOrElse(List.empty)
-        
-        NutritionalInfo(
-          code = code,
-          product_name = productName,
-          brands = brands,
-          nutriscore_grade = nutriscoreGrade,
-          nutriscore_score = nutriscoreScore,
-          energy_kcal = getNutrientValue("energy-kcal"),
-          fat = getNutrientValue("fat"),
-          saturated_fat = getNutrientValue("saturated-fat"),
-          carbohydrates = getNutrientValue("carbohydrates"),
-          sugars = getNutrientValue("sugars"),
-          proteins = getNutrientValue("proteins"),
-          salt = getNutrientValue("salt"),
-          cocoa_percentage = getOptNutrientValue("cocoa"),
-          allergens = getList(rowData, "allergens_tags"),
-          labels = getList(rowData, "labels_tags"),
-          categories = getList(rowData, "categories_tags"),
-          packaging = packagings
-        )
+    Try {
+      val offset = 500
+      val length = 100
+      val url = s"$API_BASE_URL&offset=$offset&length=$length"
+
+      val rawJsonStr = Try(scala.io.Source.fromURL(url).mkString) match {
+        case Success(json) => json
+        case Failure(e) =>
+          println(s"Failed to fetch data from API: ${e.getMessage}")
+          spark.stop()
+          sys.exit(1)
       }
 
-      // Convert to JSON
-      val jsonOutput = Arr.from(cleanedData.map { product =>
-        Obj(
-          "code" -> Str(product.code),
-          "product_name" -> Str(product.product_name),
-          "brands" -> Str(product.brands),
-          "nutriscore_grade" -> Str(product.nutriscore_grade),
-          "nutriscore_score" -> Num(product.nutriscore_score),
-          "energy_kcal" -> Num(product.energy_kcal),
-          "fat" -> Num(product.fat),
-          "saturated_fat" -> Num(product.saturated_fat),
-          "carbohydrates" -> Num(product.carbohydrates),
-          "sugars" -> Num(product.sugars),
-          "proteins" -> Num(product.proteins),
-          "salt" -> Num(product.salt),
-          "cocoa_percentage" -> product.cocoa_percentage.map(Num(_)).getOrElse(Null),
-          "allergens" -> Arr.from(product.allergens.map(Str(_))),
-          "labels" -> Arr.from(product.labels.map(Str(_))),
-          "categories" -> Arr.from(product.categories.map(Str(_))),
-          "packaging" -> Arr.from(product.packaging.map { p =>
-            Obj(
-              "material" -> Str(p.material),
-              "shape" -> Str(p.shape),
-              "recycling" -> Str(p.recycling),
-              "quantity" -> p.quantity.map(Str(_)).getOrElse(Null)
-            )
-          })
-        )
-      })
+      val jsonDF = spark.read
+        .option("multiLine", true)
+        .json(Seq(rawJsonStr).toDS)
 
-      // Write to file
-      val outputFile = new File("nutritional_data.json")
-      val writer = new PrintWriter(outputFile)
-      try {
-        writer.write(jsonOutput.toString())
-        println(s"Successfully wrote data to ${outputFile.getAbsolutePath}")
-        println("Sample data:")
-        println(jsonOutput.arr.head.toString())
-      } finally {
-        writer.close()
+      val rowsDF = jsonDF.select(explode($"rows").alias("row"))
+      val productsDF = rowsDF.select($"row.row".alias("product"))
+
+      val packagingSchema = ArrayType(StructType(Seq(
+        StructField("material", StringType, nullable = true),
+        StructField("number_of_units", StringType, nullable = true),
+        StructField("quantity_per_unit", StringType, nullable = true),
+        StructField("quantity_per_unit_unit", StringType, nullable = true),
+        StructField("quantity_per_unit_value", StringType, nullable = true),
+        StructField("recycling", StringType, nullable = true),
+        StructField("shape", StringType, nullable = true),
+        StructField("weight_measured", StringType, nullable = true)
+      )))
+
+      // Function to extract nutrition value from nutriments array
+      def getNutrimentValue(nutriments: Column, name: String): Column = {
+        filter(nutriments, n => n.getField("name") === name)
+          .getItem(0)
+          .getField("100g")
+          .cast("double")
       }
 
-    } catch {
-      case e: Exception => e.printStackTrace()
+      val parsedDF = productsDF.select(
+        $"product.code".alias("code"),
+        coalesce($"product.product_name".getItem(0).getField("text"), lit("")).alias("product_name"),
+        coalesce($"product.brands", lit("")).alias("brands"),
+        coalesce($"product.nutriscore_grade", lit("")).alias("nutriscore_grade"),
+        coalesce($"product.nutriscore_score".cast("int"), lit(0)).alias("nutriscore_score"),
+        getNutrimentValue($"product.nutriments", "energy-kcal").alias("energy_kcal"),
+        getNutrimentValue($"product.nutriments", "fat").alias("fat"),
+        getNutrimentValue($"product.nutriments", "saturated-fat").alias("saturated_fat"),
+        getNutrimentValue($"product.nutriments", "carbohydrates").alias("carbohydrates"),
+        getNutrimentValue($"product.nutriments", "sugars").alias("sugars"),
+        getNutrimentValue($"product.nutriments", "proteins").alias("proteins"),
+        getNutrimentValue($"product.nutriments", "salt").alias("salt"),
+        getNutrimentValue($"product.nutriments", "cocoa").alias("cocoa_percentage"),
+        coalesce($"product.allergens_tags", array()).cast(ArrayType(StringType)).alias("allergens"),
+        coalesce($"product.labels_tags", array()).cast(ArrayType(StringType)).alias("labels"),
+        coalesce($"product.categories_tags", array()).cast(ArrayType(StringType)).alias("categories"),
+        coalesce($"product.packagings", array()).cast(packagingSchema).alias("packaging")
+      )
+
+      val cleanedDF = parsedDF.withColumn("packaging",
+        expr("""
+          transform(packaging, p -> struct(
+            p.material as material,
+            p.shape as shape,
+            p.recycling as recycling,
+            p.quantity_per_unit as quantity
+          ))
+        """)
+      )
+
+      // Prepare data for database insertion
+      val productsToSave = cleanedDF.select(
+        $"code", $"product_name", $"brands", $"nutriscore_grade", $"nutriscore_score",
+        $"energy_kcal", $"fat", $"saturated_fat", $"carbohydrates", 
+        $"sugars", $"proteins", $"salt", $"cocoa_percentage"
+      ).na.fill(0, Seq("nutriscore_score"))
+       .na.fill(0.0, Seq(
+         "energy_kcal", "fat", "saturated_fat", "carbohydrates", 
+         "sugars", "proteins", "salt"
+       ))
+
+      val allergensToSave = cleanedDF.select(
+        $"code".alias("product_code"), 
+        explode_outer($"allergens").alias("allergen")
+      ).filter($"allergen".isNotNull && $"allergen" =!= "")
+
+      val labelsToSave = cleanedDF.select(
+        $"code".alias("product_code"), 
+        explode_outer($"labels").alias("label")
+      ).filter($"label".isNotNull && $"label" =!= "")
+
+      val categoriesToSave = cleanedDF.select(
+        $"code".alias("product_code"), 
+        explode_outer($"categories").alias("category")
+      ).filter($"category".isNotNull && $"category" =!= "")
+
+      val packagingsToSave = cleanedDF.select(
+        $"code".alias("product_code"),
+        explode_outer($"packaging").alias("pack")
+      ).select(
+        $"product_code",
+        $"pack.material",
+        $"pack.shape",
+        $"pack.recycling",
+        $"pack.quantity"
+      ).filter($"material".isNotNull && $"material" =!= "")
+
+      def writeToDB(df: DataFrame, table: String, mode: SaveMode = SaveMode.Append): Unit = {
+  Try {
+    // Read existing records based on table's unique constraints
+    val existingDF = table match {
+      case "products" =>
+        spark.read
+          .format("jdbc")
+          .option("url", DB_URL)
+          .option("dbtable", "products")
+          .option("user", DB_USER)
+          .option("password", DB_PASSWORD)
+          .load()
+          .select("code")
+      
+      case "allergens" =>
+        spark.read
+          .format("jdbc")
+          .option("url", DB_URL)
+          .option("dbtable", "allergens")
+          .option("user", DB_USER)
+          .option("password", DB_PASSWORD)
+          .load()
+          .select("product_code", "allergen")
+      
+      case "labels" =>
+        spark.read
+          .format("jdbc")
+          .option("url", DB_URL)
+          .option("dbtable", "labels")
+          .option("user", DB_USER)
+          .option("password", DB_PASSWORD)
+          .load()
+          .select("product_code", "label")
+      
+      case "categories" =>
+        spark.read
+          .format("jdbc")
+          .option("url", DB_URL)
+          .option("dbtable", "categories")
+          .option("user", DB_USER)
+          .option("password", DB_PASSWORD)
+          .load()
+          .select("product_code", "category")
+      
+      case "packagings" =>
+        // Create empty DataFrame with same schema as input
+        spark.createDataFrame(spark.sparkContext.emptyRDD[Row], df.schema)
+      
+      case _ => throw new IllegalArgumentException(s"Unknown table: $table")
+    }
+
+    // Filter out records that already exist
+    val newRecords = table match {
+      case "products" =>
+        val existingCodes = existingDF.collect().map(_.getString(0)).toSet
+        df.filter(!col("code").isin(existingCodes.toSeq:_*))
+      
+      case "allergens" =>
+        val existingPairs = existingDF.collect()
+          .map(r => (r.getString(0), r.getString(1))).toSet
+        df.filter(row => {
+          val productCode = row.getAs[String]("product_code")
+          val allergen = row.getAs[String]("allergen")
+          !existingPairs.contains((productCode, allergen))
+        })
+      
+      case "labels" =>
+        val existingPairs = existingDF.collect()
+          .map(r => (r.getString(0), r.getString(1))).toSet
+        df.filter(row => {
+          val productCode = row.getAs[String]("product_code")
+          val label = row.getAs[String]("label")
+          !existingPairs.contains((productCode, label))
+        })
+      
+      case "categories" =>
+        val existingPairs = existingDF.collect()
+          .map(r => (r.getString(0), r.getString(1))).toSet
+        df.filter(row => {
+          val productCode = row.getAs[String]("product_code")
+          val category = row.getAs[String]("category")
+          !existingPairs.contains((productCode, category))
+        })
+      
+      case "packagings" =>
+        // No duplicate check for packagings
+        df
+      
+      case _ => throw new IllegalArgumentException(s"Unknown table: $table")
+    }
+
+    // Write only new records
+    if (newRecords.count() > 0) {
+      newRecords.write
+        .format("jdbc")
+        .option("url", DB_URL)
+        .option("dbtable", table)
+        .option("user", DB_USER)
+        .option("password", DB_PASSWORD)
+        .mode(mode)
+        .save()
+      println(s"Wrote ${newRecords.count()} new records to $table")
+    } else {
+      println(s"No new records to write to $table")
+    }
+  } match {
+    case Success(_) => println(s"Successfully processed $table")
+    case Failure(e) => 
+      println(s"Failed to process $table: ${e.getMessage}")
+      e.printStackTrace()
+  }
+}
+
+      // Write data to database
+      writeToDB(productsToSave, "products", SaveMode.Append)
+      writeToDB(allergensToSave, "allergens")
+      writeToDB(labelsToSave, "labels")
+      writeToDB(categoriesToSave, "categories")
+      writeToDB(packagingsToSave, "packagings")
+
+      println("Processing completed successfully")
+    } match {
+      case Success(_) => spark.stop()
+      case Failure(e) =>
+        println(s"Error during processing: ${e.getMessage}")
+        spark.stop()
+        sys.exit(1)
     }
   }
 }
