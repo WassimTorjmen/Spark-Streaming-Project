@@ -49,12 +49,12 @@ object ProducerKafka {
           println(s"🟢 Batch offset=$offset envoyé  (${batch.length} chars)")
           println(s"   ↳ Aperçu : $preview\n")
           //reduire le temps d'attente
-          Thread.sleep(500)
+          Thread.sleep(2000)
         } else {
           println(s"API vide à offset $offset, arrêt.")
         }
         offset += batchLength
-        Thread.sleep(500)
+        Thread.sleep(2000)
       }
     } else {
       fetchBatchesFromFile(jsonPath).foreach { batch =>
@@ -69,14 +69,13 @@ object ProducerKafka {
     println(" Fin d’envoi – producer Kafka fermé.")
   }
 
-  /* Helpers*/
 
-  /** Télécharge un bloc JSON (100 lignes) et renvoie la chaîne brute. */
+ 
   def fetchBatchFromAPI(url: String): String = {
     try {
       val conn = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
-      conn.setConnectTimeout(5000)
-      conn.setReadTimeout(5000)
+      conn.setConnectTimeout(2000)
+      conn.setReadTimeout(2000)
 
       val is   = conn.getInputStream
       val json = Source.fromInputStream(is).mkString

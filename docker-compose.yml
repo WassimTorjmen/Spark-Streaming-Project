@@ -1,69 +1,52 @@
 version: "3.9"
 
-###############################################################################
-# Réseau commun
-###############################################################################
 networks:
-  data: {}
+  data:
+    name: spark-stack
+    driver: bridge
+    attachable: true         # utile pour un shell « docker run -it --network spark-stack … »
 
-###############################################################################
-# Volumes persistants
-###############################################################################
 volumes:
-  zkdata:        {}              # état ZooKeeper
-  kafka-logs:    {}              # logs + segments du broker
-  pgdata:        {}              # données PostgreSQL
-  checkpoint:    {}              # checkpoints Spark Streaming
+  zkdata: {}
+  kafka-logs: {}
+  pgdata: {}
+  checkpoint: {}
 
-###############################################################################
-# Services
-###############################################################################
 services:
-  # -------------------------------------------------------------------------
-  # 1. ZooKeeper (image maison)
-  # -------------------------------------------------------------------------
   zookeeper:
-    build: ./Infra/zookeeper
+    image: bitnami/zookeeper:3.9
     container_name: zookeeper
     networks: [data]
     volumes:
-      - zkdata:/data
-    expose: ["2181"]
+      - zkdata:/bitnami/zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports: ["2181:2181"]
 
-  # -------------------------------------------------------------------------
-  # 2. Broker Kafka (image maison)
-  # -------------------------------------------------------------------------
   kafka:
-    build: ./Infra/kafka
+    build: ./Infra/kafka             # ← Dockerfile ci-dessus
     container_name: kafka
     depends_on: [zookeeper]
     networks: [data]
     volumes:
       - kafka-logs:/tmp/kafka-logs
-    ports:
-      - "9092:9092"            # accès depuis ta machine hôte
-    environment:
-      - KAFKA_TOPICS=openfood:1:1   # topic auto-créé par l'entrypoint
+    ports: ["9092:9092"]
+    environment:                     # uniquement JVM / tuning
+      KAFKA_HEAP_OPTS: "-Xmx1g"
 
-  # -------------------------------------------------------------------------
-  # 3. PostgreSQL (image maison)
-  # -------------------------------------------------------------------------
   postgres:
-    build: ./Infra/postgres
+    image: postgres:15
     container_name: postgres
     networks: [data]
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - ./Infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
-      - POSTGRES_DB=openfood
-      - POSTGRES_USER=ingest
-      - POSTGRES_PASSWORD=ingestpwd
+      POSTGRES_DB:       openfood
+      POSTGRES_USER:     ingest
+      POSTGRES_PASSWORD: ingestpwd
+    ports: ["5432:5432"]
 
-  # -------------------------------------------------------------------------
-  # 4. Producer (API → Kafka)
-  # -------------------------------------------------------------------------
   producer:
     build:
       context: .
@@ -72,16 +55,13 @@ services:
     depends_on: [kafka]
     networks: [data]
     environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - USE_API=true                  # false ⇒ lit un Parquet local
-      - BATCH_LENGTH=100
-      - MAX_OFFSET=3808300
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092   # ← même réseau
+      USE_API:           "true"
+      BATCH_LENGTH:      "100"
+      MAX_OFFSET:        "3808300"
     volumes:
-      - ./data:/app/data              # si tu lis localement response.json
+      - ./data:/app/data
 
-  # -------------------------------------------------------------------------
-  # 5. Consumer (Kafka → console / PostgreSQL)
-  # -------------------------------------------------------------------------
   consumer:
     build:
       context: .
@@ -90,10 +70,10 @@ services:
     depends_on: [kafka, postgres]
     networks: [data]
     environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CHECKPOINT_PATH=/checkpoint/generic
-      - PG_URL=jdbc:postgresql://postgres:5432/openfood
-      - PG_USER=ingest
-      - PG_PWD=ingestpwd
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CHECKPOINT_PATH:        /checkpoint/generic
+      PG_URL:                 jdbc:postgresql://postgres:5432/openfood
+      PG_USER:                ingest
+      PG_PWD:                 ingestpwd
     volumes:
       - checkpoint:/checkpoint
