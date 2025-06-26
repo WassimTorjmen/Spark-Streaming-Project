@@ -1,273 +1,218 @@
 package com.esgi
 
-import org.apache.spark.sql.{SparkSession, DataFrame, SaveMode, Column, Row}
+import org.apache.spark.sql.{SparkSession, DataFrame, Dataset, Row, SaveMode}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.{StreamingQuery, StreamingQueryListener, Trigger}
 import org.apache.spark.sql.types._
 import scala.util.{Try, Success, Failure}
+import scala.io.Source
+import java.util.concurrent.TimeUnit
 
 object FetchAndTransform {
-
-  case class PackagingInfo(
-    material: String,
-    shape: String,
-    recycling: String,
-    quantity: Option[String]
-  )
-
+  // Configuration API
   val API_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=openfoodfacts%2Fproduct-database&config=default&split=food"
+  val BATCH_SIZE = 10
+  val MAX_RETRIES = 5
+  val RETRY_DELAY_MS = 30000 // 30 seconds
+  val REQUEST_RATE = 2 // requests per second
+  val MAX_CONSECUTIVE_FAILURES = 5
+
+  // Configuration PostgreSQL
   val DB_URL = "jdbc:postgresql://localhost:5433/food_analysis"
   val DB_USER = "postgres"
   val DB_PASSWORD = "postgres"
+  val DB_CONNECTION_POOL = "numPartitions=5;maxPoolSize=10;minPoolSize=5"
+
+  // Define schema for JSON data
+  val productSchema = new StructType()
+  .add("rows", ArrayType(
+    new StructType()
+      .add("row", new StructType()
+        .add("nutriscore_grade", StringType)
+        .add("categories_tags", ArrayType(StringType))
+      )
+  ))
 
   def main(args: Array[String]): Unit = {
-    val spark = Try {
-      SparkSession.builder()
-        .appName("FetchAndTransformSpark")
-        .master("local[*]")
-        .getOrCreate()
-    } match {
-      case Success(session) => session
-      case Failure(e) =>
-        println(s"Failed to create Spark session: ${e.getMessage}")
-        sys.exit(1)
-    }
+    val spark = SparkSession.builder()
+      .appName("FoodAnalysisStreaming")
+      .master("local[*]")
+      .config("spark.sql.shuffle.partitions", "5")
+      .config("spark.sql.streaming.checkpointLocation", "checkpoint/food_analysis")
+      .getOrCreate()
 
     import spark.implicits._
+    spark.sparkContext.setLogLevel("WARN")
+
+    // Variables for streaming state
+    var currentOffset = 0
+    var consecutiveFailures = 0
+
+    // Add complete query listener
+    spark.streams.addListener(new StreamingQueryListener {
+      override def onQueryStarted(event: StreamingQueryListener.QueryStartedEvent): Unit = {
+        println(s"🚀 Query started: ${event.id}")
+      }
+
+      override def onQueryProgress(event: StreamingQueryListener.QueryProgressEvent): Unit = {
+        println(s"📊 Query progress: ${event.progress}")
+      }
+
+      override def onQueryTerminated(event: StreamingQueryListener.QueryTerminatedEvent): Unit = {
+        event.exception.foreach { ex =>
+          println(s"🚨 Query terminated with exception: $ex")
+        }
+        println("ℹ️ Shutting down SparkSession...")
+        spark.close()
+      }
+    })
+
+    // Define the streaming query
+    val query = spark.readStream
+      .format("rate")
+      .option("rowsPerSecond", REQUEST_RATE)
+      .load()
+      .writeStream
+      .foreachBatch { (batchDF: Dataset[Row], batchId: Long) =>
+        println(s"\n=== Processing batch $batchId ===")
+        processBatch(currentOffset, batchId, spark) match {
+          case Some(newOffset) =>
+            currentOffset = newOffset
+            consecutiveFailures = 0
+          case None =>
+            consecutiveFailures += 1
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+              println(s"⚠️ Too many consecutive failures ($consecutiveFailures), stopping...")
+              spark.streams.active.foreach(_.stop())
+            }
+        }
+      }
+      .outputMode("append")
+      .trigger(Trigger.ProcessingTime("10 seconds"))
+      .option("checkpointLocation", "checkpoint/food_analysis")
+      .start()
+
+    // Graceful shutdown hook
+    sys.addShutdownHook {
+      println("\n🛑 Shutdown signal received. Stopping gracefully...")
+      Try(query.stop()).recover {
+        case e => println(s"⚠️ Error stopping query: ${e.getMessage}")
+      }
+      Try(spark.close()).recover {
+        case e => println(s"⚠️ Error closing SparkSession: ${e.getMessage}")
+      }
+      println("👋 Application shutdown complete")
+    }
+
+    query.awaitTermination()
+  }
+
+  def fetchData(offset: Int, retryCount: Int = 0)(implicit spark: SparkSession): Option[DataFrame] = {
+    import spark.implicits._
+
+    val url = s"$API_BASE_URL&offset=$offset&length=$BATCH_SIZE"
+    println(s"📦 Fetching from offset: $offset (attempt ${retryCount + 1})")
 
     Try {
-      val offset = 500
-      val length = 100
-      val url = s"$API_BASE_URL&offset=$offset&length=$length"
+      val jsonStr = Source.fromURL(url).mkString
+      if (jsonStr.isEmpty) {
+        println("⚠️ Received empty response")
+        None
+      } else {
+        val productsDF = spark.read
+  .schema(productSchema)
+  .option("multiLine", true)
+  .json(Seq(jsonStr).toDS())
+  .select(explode($"rows").as("row"))
+  .select(
+    $"row.row.nutriscore_grade".as("nutriscore_grade"),
+    $"row.row.categories_tags".as("categories_tags"),
+  )
+        productsDF.show(truncate = false)  
 
-      val rawJsonStr = Try(scala.io.Source.fromURL(url).mkString) match {
-        case Success(json) => json
-        case Failure(e) =>
-          println(s"Failed to fetch data from API: ${e.getMessage}")
-          spark.stop()
-          sys.exit(1)
+        val count = productsDF.count()
+        if (count > 0) {
+          println(s"✅ Successfully fetched $count products")
+          Some(productsDF)
+        } else {
+          println("⚠️ No products found in response")
+          None
+        }
       }
-
-      val jsonDF = spark.read
-        .option("multiLine", true)
-        .json(Seq(rawJsonStr).toDS)
-
-      val rowsDF = jsonDF.select(explode($"rows").alias("row"))
-      val productsDF = rowsDF.select($"row.row".alias("product"))
-
-      val packagingSchema = ArrayType(StructType(Seq(
-        StructField("material", StringType, nullable = true),
-        StructField("number_of_units", StringType, nullable = true),
-        StructField("quantity_per_unit", StringType, nullable = true),
-        StructField("quantity_per_unit_unit", StringType, nullable = true),
-        StructField("quantity_per_unit_value", StringType, nullable = true),
-        StructField("recycling", StringType, nullable = true),
-        StructField("shape", StringType, nullable = true),
-        StructField("weight_measured", StringType, nullable = true)
-      )))
-
-      // Function to extract nutrition value from nutriments array
-      def getNutrimentValue(nutriments: Column, name: String): Column = {
-        filter(nutriments, n => n.getField("name") === name)
-          .getItem(0)
-          .getField("100g")
-          .cast("double")
-      }
-
-      val parsedDF = productsDF.select(
-        $"product.code".alias("code"),
-        coalesce($"product.product_name".getItem(0).getField("text"), lit("")).alias("product_name"),
-        coalesce($"product.brands", lit("")).alias("brands"),
-        coalesce($"product.nutriscore_grade", lit("")).alias("nutriscore_grade"),
-        coalesce($"product.nutriscore_score".cast("int"), lit(0)).alias("nutriscore_score"),
-        getNutrimentValue($"product.nutriments", "energy-kcal").alias("energy_kcal"),
-        getNutrimentValue($"product.nutriments", "fat").alias("fat"),
-        getNutrimentValue($"product.nutriments", "saturated-fat").alias("saturated_fat"),
-        getNutrimentValue($"product.nutriments", "carbohydrates").alias("carbohydrates"),
-        getNutrimentValue($"product.nutriments", "sugars").alias("sugars"),
-        getNutrimentValue($"product.nutriments", "proteins").alias("proteins"),
-        getNutrimentValue($"product.nutriments", "salt").alias("salt"),
-        getNutrimentValue($"product.nutriments", "cocoa").alias("cocoa_percentage"),
-        coalesce($"product.allergens_tags", array()).cast(ArrayType(StringType)).alias("allergens"),
-        coalesce($"product.labels_tags", array()).cast(ArrayType(StringType)).alias("labels"),
-        coalesce($"product.categories_tags", array()).cast(ArrayType(StringType)).alias("categories"),
-        coalesce($"product.packagings", array()).cast(packagingSchema).alias("packaging")
-      )
-
-      val cleanedDF = parsedDF.withColumn("packaging",
-        expr("""
-          transform(packaging, p -> struct(
-            p.material as material,
-            p.shape as shape,
-            p.recycling as recycling,
-            p.quantity_per_unit as quantity
-          ))
-        """)
-      )
-
-      // Prepare data for database insertion
-      val productsToSave = cleanedDF.select(
-        $"code", $"product_name", $"brands", $"nutriscore_grade", $"nutriscore_score",
-        $"energy_kcal", $"fat", $"saturated_fat", $"carbohydrates", 
-        $"sugars", $"proteins", $"salt", $"cocoa_percentage"
-      ).na.fill(0, Seq("nutriscore_score"))
-       .na.fill(0.0, Seq(
-         "energy_kcal", "fat", "saturated_fat", "carbohydrates", 
-         "sugars", "proteins", "salt"
-       ))
-
-      val allergensToSave = cleanedDF.select(
-        $"code".alias("product_code"), 
-        explode_outer($"allergens").alias("allergen")
-      ).filter($"allergen".isNotNull && $"allergen" =!= "")
-
-      val labelsToSave = cleanedDF.select(
-        $"code".alias("product_code"), 
-        explode_outer($"labels").alias("label")
-      ).filter($"label".isNotNull && $"label" =!= "")
-
-      val categoriesToSave = cleanedDF.select(
-        $"code".alias("product_code"), 
-        explode_outer($"categories").alias("category")
-      ).filter($"category".isNotNull && $"category" =!= "")
-
-      val packagingsToSave = cleanedDF.select(
-        $"code".alias("product_code"),
-        explode_outer($"packaging").alias("pack")
-      ).select(
-        $"product_code",
-        $"pack.material",
-        $"pack.shape",
-        $"pack.recycling",
-        $"pack.quantity"
-      ).filter($"material".isNotNull && $"material" =!= "")
-
-      def writeToDB(df: DataFrame, table: String, mode: SaveMode = SaveMode.Append): Unit = {
-  Try {
-    // Read existing records based on table's unique constraints
-    val existingDF = table match {
-      case "products" =>
-        spark.read
-          .format("jdbc")
-          .option("url", DB_URL)
-          .option("dbtable", "products")
-          .option("user", DB_USER)
-          .option("password", DB_PASSWORD)
-          .load()
-          .select("code")
-      
-      case "allergens" =>
-        spark.read
-          .format("jdbc")
-          .option("url", DB_URL)
-          .option("dbtable", "allergens")
-          .option("user", DB_USER)
-          .option("password", DB_PASSWORD)
-          .load()
-          .select("product_code", "allergen")
-      
-      case "labels" =>
-        spark.read
-          .format("jdbc")
-          .option("url", DB_URL)
-          .option("dbtable", "labels")
-          .option("user", DB_USER)
-          .option("password", DB_PASSWORD)
-          .load()
-          .select("product_code", "label")
-      
-      case "categories" =>
-        spark.read
-          .format("jdbc")
-          .option("url", DB_URL)
-          .option("dbtable", "categories")
-          .option("user", DB_USER)
-          .option("password", DB_PASSWORD)
-          .load()
-          .select("product_code", "category")
-      
-      case "packagings" =>
-        // Create empty DataFrame with same schema as input
-        spark.createDataFrame(spark.sparkContext.emptyRDD[Row], df.schema)
-      
-      case _ => throw new IllegalArgumentException(s"Unknown table: $table")
+    } match {
+      case Success(result) => result
+      case Failure(e) if e.getMessage.contains("429") && retryCount < MAX_RETRIES =>
+        println(s"⚠️ Rate limited, retrying in ${RETRY_DELAY_MS/1000} seconds...")
+        TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS)
+        fetchData(offset, retryCount + 1)
+      case Failure(e) =>
+        println(s"❌ Failed to fetch data: ${e.getMessage}")
+        None
     }
+  }
 
-    // Filter out records that already exist
-    val newRecords = table match {
-      case "products" =>
-        val existingCodes = existingDF.collect().map(_.getString(0)).toSet
-        df.filter(!col("code").isin(existingCodes.toSeq:_*))
-      
-      case "allergens" =>
-        val existingPairs = existingDF.collect()
-          .map(r => (r.getString(0), r.getString(1))).toSet
-        df.filter(row => {
-          val productCode = row.getAs[String]("product_code")
-          val allergen = row.getAs[String]("allergen")
-          !existingPairs.contains((productCode, allergen))
-        })
-      
-      case "labels" =>
-        val existingPairs = existingDF.collect()
-          .map(r => (r.getString(0), r.getString(1))).toSet
-        df.filter(row => {
-          val productCode = row.getAs[String]("product_code")
-          val label = row.getAs[String]("label")
-          !existingPairs.contains((productCode, label))
-        })
-      
-      case "categories" =>
-        val existingPairs = existingDF.collect()
-          .map(r => (r.getString(0), r.getString(1))).toSet
-        df.filter(row => {
-          val productCode = row.getAs[String]("product_code")
-          val category = row.getAs[String]("category")
-          !existingPairs.contains((productCode, category))
-        })
-      
-      case "packagings" =>
-        // No duplicate check for packagings
-        df
-      
-      case _ => throw new IllegalArgumentException(s"Unknown table: $table")
-    }
+  def processBatch(offset: Int, batchId: Long, spark: SparkSession): Option[Int] = {
+  implicit val ss: SparkSession = spark
+  import spark.implicits._
 
-    // Write only new records
-    if (newRecords.count() > 0) {
-      newRecords.write
-        .format("jdbc")
-        .option("url", DB_URL)
-        .option("dbtable", table)
-        .option("user", DB_USER)
-        .option("password", DB_PASSWORD)
-        .mode(mode)
-        .save()
-      println(s"Wrote ${newRecords.count()} new records to $table")
+  fetchData(offset).flatMap { productsDF =>
+    if (productsDF.count() == 0) {
+      println("ℹ️ No data to process in this batch")
+      None
     } else {
-      println(s"No new records to write to $table")
+      // 1. Nutriscore analysis
+      val nutriscoreDF = productsDF
+        .withColumn("nutriscore", 
+          when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
+          .otherwise("UNKNOWN"))
+        .filter($"nutriscore_grade".isNotNull)
+        .groupBy("nutriscore")
+        .count()
+        .withColumnRenamed("count", "product_count")
+        .withColumn("batch_id", lit(batchId))
+        .withColumn("timestamp", current_timestamp())
+
+      // 2. Categories analysis
+      val categoriesDF = productsDF
+        .withColumn("category", explode($"categories_tags"))
+        .filter($"category".isNotNull && !$"category".isin("en:null", "null"))
+        .withColumn("category", regexp_replace($"category", "en:", ""))
+        .groupBy("category")
+        .count()
+        .withColumnRenamed("count", "product_count")
+        .withColumn("batch_id", lit(batchId))
+        .withColumn("timestamp", current_timestamp())
+
+
+      // Save to PostgreSQL
+      saveToPostgres(nutriscoreDF, "nutriscore_counts_current", SaveMode.Overwrite)
+      saveToPostgres(categoriesDF, "categories_counts_current", SaveMode.Overwrite)
+
+      println(s"✅ Successfully processed batch $batchId")
+      Some(offset + BATCH_SIZE)
     }
-  } match {
-    case Success(_) => println(s"Successfully processed $table")
-    case Failure(e) => 
-      println(s"Failed to process $table: ${e.getMessage}")
-      e.printStackTrace()
   }
 }
 
-      // Write data to database
-      writeToDB(productsToSave, "products", SaveMode.Append)
-      writeToDB(allergensToSave, "allergens")
-      writeToDB(labelsToSave, "labels")
-      writeToDB(categoriesToSave, "categories")
-      writeToDB(packagingsToSave, "packagings")
-
-      println("Processing completed successfully")
-    } match {
-      case Success(_) => spark.stop()
-      case Failure(e) =>
-        println(s"Error during processing: ${e.getMessage}")
-        spark.stop()
-        sys.exit(1)
+  def saveToPostgres(df: DataFrame, tableName: String, mode: SaveMode): Unit = {
+    Try {
+            // Show the DataFrame content in console first
+      println(s"\n📊 Showing DataFrame content for table: $tableName")
+      df.show(numRows = 20, truncate = false)
+      
+      df.write
+        .format("jdbc")
+        .option("url", DB_URL)
+        .option("dbtable", tableName)
+        .option("user", DB_USER)
+        .option("password", DB_PASSWORD)
+        .option("connectionProperties", DB_CONNECTION_POOL)
+        .mode(mode)
+        .save()
+      println(s"💾 Saved ${df.count()} rows to $tableName")
+    }.recover {
+      case e: Exception =>
+        println(s"❌ Failed to save to $tableName: ${e.getMessage}")
     }
   }
 }

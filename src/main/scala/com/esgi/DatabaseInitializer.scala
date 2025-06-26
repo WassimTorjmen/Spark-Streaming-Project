@@ -17,66 +17,39 @@ object DatabaseInitializer {
     }
   }
 
-  def createTables(conn: Connection): Unit = {
-    val stmt = conn.createStatement()
-    
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS products (
-        code VARCHAR(50) PRIMARY KEY,
-        product_name TEXT,
-        brands TEXT,
-        nutriscore_grade VARCHAR(50),
-        nutriscore_score INTEGER,
-        energy_kcal DOUBLE PRECISION,
-        fat DOUBLE PRECISION,
-        saturated_fat DOUBLE PRECISION,
-        carbohydrates DOUBLE PRECISION,
-        sugars DOUBLE PRECISION,
-        proteins DOUBLE PRECISION,
-        salt DOUBLE PRECISION,
-        cocoa_percentage DOUBLE PRECISION,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    """)
+ def createTables(conn: Connection): Unit = {
+  val stmt = conn.createStatement()
 
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS allergens (
-        id SERIAL PRIMARY KEY,
-        product_code VARCHAR(50) REFERENCES products(code) ON DELETE CASCADE,
-        allergen TEXT,
-        UNIQUE(product_code, allergen)
-      )
-    """)
+  // Drop tables if they exist (for development only - remove in production)
+  stmt.execute("DROP TABLE IF EXISTS nutriscore_counts_current")
+  stmt.execute("DROP TABLE IF EXISTS nutriment_aggregates")
+  stmt.execute("DROP TABLE IF EXISTS categories_counts_current")
 
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS labels (
-        id SERIAL PRIMARY KEY,
-        product_code VARCHAR(50) REFERENCES products(code) ON DELETE CASCADE,
-        label TEXT,
-        UNIQUE(product_code, label)
-      )
-    """)
+  // Create tables with improved schema
+  stmt.execute("""
+    CREATE TABLE nutriscore_counts_current (
+      batch_id BIGINT,
+      timestamp TIMESTAMP,
+      nutriscore VARCHAR(10),
+      product_count INTEGER DEFAULT 0
+    )
+  """)
 
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS categories (
-        id SERIAL PRIMARY KEY,
-        product_code VARCHAR(50) REFERENCES products(code) ON DELETE CASCADE,
-        category TEXT,
-        UNIQUE(product_code, category)
-      )
-    """)
+  stmt.execute("""
+    CREATE TABLE categories_counts_current (
+      batch_id BIGINT,
+      timestamp TIMESTAMP,
+      category VARCHAR(255),
+      product_count INTEGER DEFAULT 0
+    )
+  """)
 
-    stmt.execute("""
-      CREATE TABLE IF NOT EXISTS packagings (
-        id SERIAL PRIMARY KEY,
-        product_code VARCHAR(50) REFERENCES products(code) ON DELETE CASCADE,
-        material TEXT,
-        shape TEXT,
-        recycling TEXT,
-        quantity TEXT
-      )
-    """)
+  // Add indexes for better query performance
+  stmt.execute("CREATE INDEX idx_nutriscore_batch ON nutriscore_counts_current(batch_id)")
+  stmt.execute("CREATE INDEX idx_nutriscore_grade ON nutriscore_counts_current(nutriscore)")
+  stmt.execute("CREATE INDEX idx_category_batch ON categories_counts_current(batch_id)")
+  stmt.execute("CREATE INDEX idx_category_name ON categories_counts_current(category)")
 
-    stmt.close()
-  }
+  stmt.close()
+}
 }
