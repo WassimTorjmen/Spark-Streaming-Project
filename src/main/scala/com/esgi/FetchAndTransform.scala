@@ -192,8 +192,8 @@ object FetchAndTransform {
           )
 
         // Save to PostgreSQL - using Overwrite mode since we're using Complete output
-        saveToPostgres(nutriscoreDF, "nutriscore_counts_current", SaveMode.Overwrite)
-        saveToPostgres(categoriesDF, "categories_counts_current", SaveMode.Overwrite)
+        saveToPostgres(nutriscoreDF, "nutriscore_counts_current", SaveMode.Append)
+        saveToPostgres(categoriesDF, "categories_counts_current", SaveMode.Append)
 
         println(s"✅ Successfully processed batch $batchId")
         Some(offset + BATCH_SIZE)
