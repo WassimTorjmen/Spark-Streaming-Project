@@ -25,13 +25,13 @@ object FetchAndTransform {
 
   // Define schema for JSON data
   val productSchema = new StructType()
-  .add("rows", ArrayType(
-    new StructType()
-      .add("row", new StructType()
-        .add("nutriscore_grade", StringType)
-        .add("categories_tags", ArrayType(StringType))
-      )
-  ))
+    .add("rows", ArrayType(
+      new StructType()
+        .add("row", new StructType()
+          .add("nutriscore_grade", StringType)
+          .add("categories_tags", ArrayType(StringType))
+        )
+    ))
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
@@ -67,12 +67,19 @@ object FetchAndTransform {
       }
     })
 
-    // Define the streaming query
-    val query = spark.readStream
+    // Create a streaming DataFrame that will track our current offset
+    val offsetStream = spark.readStream
       .format("rate")
       .option("rowsPerSecond", REQUEST_RATE)
       .load()
+      .select(lit(currentOffset).as("current_offset"))
+
+    // Define the streaming query with Complete output mode
+    val query = offsetStream
+      .groupBy()
+      .agg(max("current_offset").as("max_offset"))
       .writeStream
+      .outputMode("complete")  // Changed from append to complete
       .foreachBatch { (batchDF: Dataset[Row], batchId: Long) =>
         println(s"\n=== Processing batch $batchId ===")
         processBatch(currentOffset, batchId, spark) match {
@@ -87,7 +94,6 @@ object FetchAndTransform {
             }
         }
       }
-      .outputMode("append")
       .trigger(Trigger.ProcessingTime("10 seconds"))
       .option("checkpointLocation", "checkpoint/food_analysis")
       .start()
@@ -120,14 +126,14 @@ object FetchAndTransform {
         None
       } else {
         val productsDF = spark.read
-  .schema(productSchema)
-  .option("multiLine", true)
-  .json(Seq(jsonStr).toDS())
-  .select(explode($"rows").as("row"))
-  .select(
-    $"row.row.nutriscore_grade".as("nutriscore_grade"),
-    $"row.row.categories_tags".as("categories_tags"),
-  )
+          .schema(productSchema)
+          .option("multiLine", true)
+          .json(Seq(jsonStr).toDS())
+          .select(explode($"rows").as("row"))
+          .select(
+            $"row.row.nutriscore_grade".as("nutriscore_grade"),
+            $"row.row.categories_tags".as("categories_tags"),
+          )
         productsDF.show(truncate = false)  
 
         val count = productsDF.count()
@@ -152,51 +158,52 @@ object FetchAndTransform {
   }
 
   def processBatch(offset: Int, batchId: Long, spark: SparkSession): Option[Int] = {
-  implicit val ss: SparkSession = spark
-  import spark.implicits._
+    implicit val ss: SparkSession = spark
+    import spark.implicits._
 
-  fetchData(offset).flatMap { productsDF =>
-    if (productsDF.count() == 0) {
-      println("ℹ️ No data to process in this batch")
-      None
-    } else {
-      // 1. Nutriscore analysis
-      val nutriscoreDF = productsDF
-        .withColumn("nutriscore", 
-          when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
-          .otherwise("UNKNOWN"))
-        .filter($"nutriscore_grade".isNotNull)
-        .groupBy("nutriscore")
-        .count()
-        .withColumnRenamed("count", "product_count")
-        .withColumn("batch_id", lit(batchId))
-        .withColumn("timestamp", current_timestamp())
+    fetchData(offset).flatMap { productsDF =>
+      if (productsDF.count() == 0) {
+        println("ℹ️ No data to process in this batch")
+        None
+      } else {
+        // 1. Nutriscore analysis - using complete output mode
+        val nutriscoreDF = productsDF
+          .withColumn("nutriscore", 
+            when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
+            .otherwise("UNKNOWN"))
+          .filter($"nutriscore_grade".isNotNull)
+          .groupBy("nutriscore")
+          .agg(
+            count("*").as("product_count"),
+            max(lit(batchId)).as("batch_id"),
+            max(current_timestamp()).as("timestamp")
+          )
 
-      // 2. Categories analysis
-      val categoriesDF = productsDF
-        .withColumn("category", explode($"categories_tags"))
-        .filter($"category".isNotNull && !$"category".isin("en:null", "null"))
-        .withColumn("category", regexp_replace($"category", "en:", ""))
-        .groupBy("category")
-        .count()
-        .withColumnRenamed("count", "product_count")
-        .withColumn("batch_id", lit(batchId))
-        .withColumn("timestamp", current_timestamp())
+        // 2. Categories analysis - using complete output mode
+        val categoriesDF = productsDF
+          .withColumn("category", explode($"categories_tags"))
+          .filter($"category".isNotNull && !$"category".isin("en:null", "null"))
+          .withColumn("category", regexp_replace($"category", "en:", ""))
+          .groupBy("category")
+          .agg(
+            count("*").as("product_count"),
+            max(lit(batchId)).as("batch_id"),
+            max(current_timestamp()).as("timestamp")
+          )
 
+        // Save to PostgreSQL - using Overwrite mode since we're using Complete output
+        saveToPostgres(nutriscoreDF, "nutriscore_counts_current", SaveMode.Overwrite)
+        saveToPostgres(categoriesDF, "categories_counts_current", SaveMode.Overwrite)
 
-      // Save to PostgreSQL
-      saveToPostgres(nutriscoreDF, "nutriscore_counts_current", SaveMode.Overwrite)
-      saveToPostgres(categoriesDF, "categories_counts_current", SaveMode.Overwrite)
-
-      println(s"✅ Successfully processed batch $batchId")
-      Some(offset + BATCH_SIZE)
+        println(s"✅ Successfully processed batch $batchId")
+        Some(offset + BATCH_SIZE)
+      }
     }
   }
-}
 
   def saveToPostgres(df: DataFrame, tableName: String, mode: SaveMode): Unit = {
     Try {
-            // Show the DataFrame content in console first
+      // Show the DataFrame content in console first
       println(s"\n📊 Showing DataFrame content for table: $tableName")
       df.show(numRows = 20, truncate = false)
       
