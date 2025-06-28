@@ -19,10 +19,12 @@ object ProducerKafka {
     val batchLength = 100
     val maxOffset   = 3808300          // pour tester après on fait 3808300 ensuite
     val topic       = "openfood"
+    val bootstrap = sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
     /*Config Kafka */
     val props = new Properties()
-    props.put("bootstrap.servers", "localhost:9092")
+    props.put("bootstrap.servers", bootstrap)
+    
     props.put("key.serializer",
               "org.apache.kafka.common.serialization.StringSerializer")
               props.put("value.serializer",
@@ -67,14 +69,13 @@ object ProducerKafka {
     println(" Fin d’envoi – producer Kafka fermé.")
   }
 
-  /* Helpers*/
 
-  /** Télécharge un bloc JSON (100 lignes) et renvoie la chaîne brute. */
+ 
   def fetchBatchFromAPI(url: String): String = {
     try {
       val conn = new URL(url).openConnection().asInstanceOf[HttpURLConnection]
-      conn.setConnectTimeout(5000)
-      conn.setReadTimeout(5000)
+      conn.setConnectTimeout(2000)
+      conn.setReadTimeout(2000)
 
       val is   = conn.getInputStream
       val json = Source.fromInputStream(is).mkString

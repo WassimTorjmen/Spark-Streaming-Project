@@ -1,51 +1,79 @@
-version: '3.8'
+version: "3.9"
+
+networks:
+  data:
+    name: spark-stack
+    driver: bridge
+    attachable: true         # utile pour un shell « docker run -it --network spark-stack … »
+
+volumes:
+  zkdata: {}
+  kafka-logs: {}
+  pgdata: {}
+  checkpoint: {}
 
 services:
   zookeeper:
-    image: bitnami/zookeeper:latest
-    ports:
-      - "2181:2181"
-    environment:
-      - ALLOW_ANONYMOUS_LOGIN=yes
-    networks:
-      - food-network
-  
-  kafka:
-    image: bitnami/kafka:latest
-    environment:
-      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-    ports:
-      - "9092:9092"
-    depends_on:
-      - zookeeper
-    networks:
-      - food-network
-  
-  postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: food_analysis
-    ports:
-      - "5433:5432"
+    image: bitnami/zookeeper:3.9
+    container_name: zookeeper
+    networks: [data]
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - food-network
+      - zkdata:/bitnami/zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports: ["2181:2181"]
 
-volumes:
-  postgres_data:
+  kafka:
+    build: ./Infra/kafka             # ← Dockerfile ci-dessus
+    container_name: kafka
+    depends_on: [zookeeper]
+    networks: [data]
+    volumes:
+      - kafka-logs:/tmp/kafka-logs
+    ports: ["9092:9092"]
+    environment:                     # uniquement JVM / tuning
+      KAFKA_HEAP_OPTS: "-Xmx1g"
 
-networks:
-  food-network:
-    driver: bridge
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    networks: [data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./Infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      POSTGRES_DB:       openfood
+      POSTGRES_USER:     ingest
+      POSTGRES_PASSWORD: ingestpwd
+    ports: ["5432:5432"]
+
+  producer:
+    build:
+      context: .
+      dockerfile: src/main/scala/com/esgi/Producer/Dockerfile
+    container_name: producer
+    depends_on: [kafka]
+    networks: [data]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092   # ← même réseau
+      USE_API:           "true"
+      BATCH_LENGTH:      "100"
+      MAX_OFFSET:        "3808300"
+    volumes:
+      - ./data:/app/data
+
+  consumer:
+    build:
+      context: .
+      dockerfile: src/main/scala/com/esgi/Consumer/Dockerfile
+    container_name: consumer
+    depends_on: [kafka, postgres]
+    networks: [data]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CHECKPOINT_PATH:        /checkpoint/generic
+      PG_URL:                 jdbc:postgresql://postgres:5432/openfood
+      PG_USER:                ingest
+      PG_PWD:                 ingestpwd
+    volumes:
+      - checkpoint:/checkpoint

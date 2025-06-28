@@ -1,0 +1,69 @@
+version: "3.9"
+
+###############################################################################
+# Réseau unique : tous les conteneurs se résolvent par leur nom (kafka, …)
+###############################################################################
+networks:
+  data: {}
+
+###############################################################################
+# Volumes persistants : logs Kafka, données ZooKeeper, base PostgreSQL
+###############################################################################
+volumes:
+  zkdata:       {}
+  kafka-logs:   {}
+  pgdata:       {}
+
+###############################################################################
+# Services infrastructure
+###############################################################################
+services:
+  # -------------------------------------------------------------------------
+  # 1. ZooKeeper
+  # -------------------------------------------------------------------------
+  zookeeper:
+    image: bitnami/zookeeper:3.9            # image publique
+    container_name: zookeeper
+    networks: [data]
+    volumes:
+      - zkdata:/bitnami/zookeeper           # persistance
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"          # pas d’auth pour le dev
+      ZOO_PORT_NUMBER: 2181                 # facultatif (défaut 2181)
+    ports:
+      - "2181:2181"
+
+  # -------------------------------------------------------------------------
+  # 2. Broker Kafka (connecté à ZooKeeper)
+  # -------------------------------------------------------------------------
+  kafka:
+    build: ./kafka                   # ⇢ infra/kafka/Dockerfile
+    container_name: kafka
+    depends_on: [zookeeper]
+    networks: [data]
+    volumes:
+      - kafka-logs:/tmp/kafka-logs   # logs & données du broker
+    ports:
+      - "9092:9092"                  # PLAINTEXT exposé
+    environment:
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_HEAP_OPTS: "-Xmx1g"
+
+
+  # -------------------------------------------------------------------------
+  # 3. PostgreSQL (base cible)
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    networks: [data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data           # données persistantes
+      # scripts d’init éventuels :
+      - ./postgres/init.sql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: food_analysis
+    ports:
+      - "5432:5432"
