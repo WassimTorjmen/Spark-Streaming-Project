@@ -16,7 +16,7 @@ object ProducerKafka {
     /* --------- Paramètres --------- */
     val useAPI      = true          // false ⇒ lit food.parquet
     val jsonPath    = "data/food.parquet" // fichier de teste 
-    val batchLength = 100
+    val batchLength = 10
     val maxOffset   = 3808300          // pour tester après on fait 3808300 ensuite
     val topic       = "openfood"
     val bootstrap = sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
