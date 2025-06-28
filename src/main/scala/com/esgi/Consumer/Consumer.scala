@@ -49,9 +49,9 @@ object ConsumerKafka {
     // Write to console
     val query = transformedStream.writeStream
       .format("console")
-      .outputMode("append")
+      .outputMode("update")
       .option("truncate", "false")
-      .option("numRows", "20")
+      .option("numRows", "1000")
       .option("checkpointLocation", checkpoint)
       .start()
 
@@ -59,14 +59,18 @@ object ConsumerKafka {
   }
 
   def applyTransformations(df: DataFrame): DataFrame = {
-    val spark = SparkSession.getActiveSession.get
-    import spark.implicits._
-    
-    // 1. Nutriscore analysis
-    df.withColumn("nutriscore", 
+  val spark = SparkSession.getActiveSession.get
+  import spark.implicits._
+
+  val transformed = df
+    .withColumn("nutriscore", 
       when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
       .otherwise("UNKNOWN"))
-      .filter($"nutriscore_grade".isNotNull)
-      .select("nutriscore", "categories_tags")
-  }
+    .filter($"nutriscore_grade".isNotNull)
+    .select("nutriscore")
+
+  transformed
+    .groupBy("nutriscore")
+    .agg(count("*").as("product_count"))
+}
 }
