@@ -1,22 +1,19 @@
 package com.esgi
 
+import scala.concurrent.Future
+import scala.concurrent.ExecutionContext.Implicits.global
+
 object Main {
   def main(args: Array[String]): Unit = {
-    println("🚀 Lancement du Producer depuis Main")
+    println("Main lance ProducerKafka + ConsumerKafka")
 
-    try {
-      Producer.main(Array()) // Lance le Producer normalement
-      println("🟢 Producer exécuté sans exception.")
-    } catch {
-      case e: Exception =>
-        println(s"❌ Erreur dans le Producer : ${e.getMessage}")
-        e.printStackTrace()
-    }
+    // lance le Producer dans un thread séparé
+    Future { ProducerKafka.main(Array.empty) }
 
-    // Empêche le programme de se terminer immédiatement
-    println("⏳ Le programme reste actif. Ctrl+C pour quitter.")
-    while (true) {
-      Thread.sleep(1000)
-    }
+    // laisse 2 s au broker + producer
+    Thread.sleep(2000)
+
+    // lance le Consumer
+    ConsumerKafka.main(Array.empty)
   }
 }
