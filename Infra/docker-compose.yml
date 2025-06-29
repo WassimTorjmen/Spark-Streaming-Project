@@ -66,4 +66,4 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: food_analysis
     ports:
-      - "5432:5432"
+      - "5433:5432"

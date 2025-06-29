@@ -30,7 +30,8 @@ ENV KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
 
 # 4) lancement : Spark télécharge les jars manquants
 ENTRYPOINT ["spark-submit", \
-            "--packages","org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0",\
-            "--class","com.esgi.ConsumerKafka",\
-            "--master","local[*]",\
-            "/app/consumer.jar"]
+    "--packages","org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.6.0",\
+    "--class","com.esgi.ConsumerKafka",\
+    "--master","local[*]",\
+    "/app/consumer.jar"]
+

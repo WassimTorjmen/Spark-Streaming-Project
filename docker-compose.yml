@@ -45,7 +45,7 @@ services:
       POSTGRES_DB:       openfood
       POSTGRES_USER:     ingest
       POSTGRES_PASSWORD: ingestpwd
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
 
   producer:
     build:
