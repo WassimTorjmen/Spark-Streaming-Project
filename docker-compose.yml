@@ -77,3 +77,16 @@ services:
       PG_PWD:                 ingestpwd
     volumes:
       - checkpoint:/checkpoint
+
+  # 📊 Streamlit Dashboard
+  streamlit:
+    build:
+      context: ./streamlit       # ← correspond au dossier contenant le Dockerfile
+      dockerfile: Dockerfile     # ← ce fichier est bien dans ./streamlit
+    container_name: streamlit
+    depends_on: [postgres]
+    networks: [data]
+    ports:
+      - "8501:8501"
+
+
