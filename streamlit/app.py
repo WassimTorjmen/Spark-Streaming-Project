@@ -20,7 +20,6 @@ def get_engine():
 # --------------------------------------------
 # Charger les résultats des transformations
 # --------------------------------------------
-@st.cache_data
 def load_nutriscore_data():
     engine = get_engine()
     if engine is None:
@@ -48,16 +47,16 @@ with st.sidebar:
 # Page 1 : Test de connexion
 # --------------------------------------------
 if selected == "Test PostgreSQL":
-    st.title(" Connexion à PostgreSQL")
+    st.title("Connexion à PostgreSQL")
     engine = get_engine()
     if engine is not None:
         try:
             with engine.connect():
-                st.success(" Connexion réussie à PostgreSQL")
+                st.success("✅ Connexion réussie à PostgreSQL")
         except Exception as e:
-            st.error(f"Connexion échouée : {e}")
+            st.error(f"❌ Connexion échouée : {e}")
     else:
-        st.warning(" Impossible d'établir une connexion.")
+        st.warning("⚠️ Impossible d'établir une connexion.")
 
 # --------------------------------------------
 # Page 2 : Transformations depuis le Consumer
@@ -65,13 +64,17 @@ if selected == "Test PostgreSQL":
 elif selected == "Transformations":
     st.title("Résultat des transformations du Consumer")
 
-    df = load_nutriscore_data()
+    if st.button("🔄 Recharger les données"):
+        df = load_nutriscore_data()
+        st.success("✅ Données rechargées depuis PostgreSQL")
+    else:
+        df = load_nutriscore_data()
 
     if not df.empty:
-        st.success(f"{len(df)} lignes chargées depuis PostgreSQL.")
+        st.write(f"{len(df)} lignes chargées depuis PostgreSQL.")
         st.dataframe(df)
 
-        st.markdown("###  Répartition des produits par Nutriscore")
+        st.markdown("### Répartition des produits par Nutriscore")
         fig = px.bar(df, x="nutriscore", y="product_count",
                      labels={"nutriscore": "Nutriscore", "product_count": "Nombre de produits"},
                      color="nutriscore",
@@ -80,3 +83,13 @@ elif selected == "Transformations":
     else:
         st.warning("Aucune donnée à afficher pour `nutriscore_counts`.")
 
+# --------------------------------------------
+# Page 3 : À propos
+# --------------------------------------------
+elif selected == "À propos":
+    st.title("📘 À propos")
+    st.markdown("""
+    - **Projet** : Pipeline Kafka → Spark → PostgreSQL → Streamlit  
+    - **Visualisation** : Résultats affichés dynamiquement  
+    - **Auteur** : Ton Nom ✨
+    """)
