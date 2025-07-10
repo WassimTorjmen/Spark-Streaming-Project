@@ -5,3 +5,4 @@ streamlit-option-menu
 sqlalchemy
 pandas
 plotly
+
