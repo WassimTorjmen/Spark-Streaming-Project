@@ -7,6 +7,7 @@ import plotly.express as px
 # --------------------------------------------
 # Connexion PostgreSQL
 # --------------------------------------------
+#est un objet de SQLAlchemy qui contient toutes les infos nécessaires
 def get_engine():
     try:
         engine = sqlalchemy.create_engine(
@@ -104,10 +105,10 @@ elif selected == "Transformations":
 
     if not cat_df.empty:
         top_n = 8
-        top = cat_df.nlargest(top_n, "category_count").copy()
+        top = cat_df.nlargest(top_n, "category_count").copy() #Récupère les 8 lignes avec la plus grande valeur de category_count
         other_sum = cat_df["category_count"].sum() - top["category_count"].sum()
 
-        if other_sum > 0:
+        if other_sum > 0: #Si on a bien des "autres", on les ajoute comme 9e catégorie nommée "Autres"
             autres = pd.DataFrame([{
                 "main_category": "Autres",
                 "category_count": other_sum

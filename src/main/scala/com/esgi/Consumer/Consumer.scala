@@ -100,7 +100,9 @@ object ConsumerKafka {
 
     df
       .withColumn("main_category", $"categories_tags".getItem(0))
-      .filter($"main_category".isNotNull)
+      .withColumn("main_category", lower(trim($"main_category")))  // Nettoyage
+      .filter($"main_category".isNotNull &&
+              !$"main_category".isin("en:undefined", "en:null", "undefined", "null", ""))
       .groupBy("main_category")
       .agg(count("*").as("category_count"))
   }
