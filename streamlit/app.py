@@ -32,6 +32,18 @@ def load_nutriscore_data():
         st.error(f"Impossible de lire la table 'nutriscore_counts' : {e}")
         return pd.DataFrame()
 
+def load_category_data():
+    engine = get_engine()
+    if engine is None:
+        return pd.DataFrame()
+
+    try:
+        df = pd.read_sql("SELECT * FROM category_counts", engine)
+        return df
+    except Exception as e:
+        st.error(f"Impossible de lire la table 'category_counts' : {e}")
+        return pd.DataFrame()
+
 # --------------------------------------------
 # Menu principal
 # --------------------------------------------
@@ -52,11 +64,11 @@ if selected == "Test PostgreSQL":
     if engine is not None:
         try:
             with engine.connect():
-                st.success("✅ Connexion réussie à PostgreSQL")
+                st.success(" Connexion réussie à PostgreSQL")
         except Exception as e:
-            st.error(f"❌ Connexion échouée : {e}")
+            st.error(f" Connexion échouée : {e}")
     else:
-        st.warning("⚠️ Impossible d'établir une connexion.")
+        st.warning(" Impossible d'établir une connexion.")
 
 # --------------------------------------------
 # Page 2 : Transformations depuis le Consumer
@@ -64,11 +76,13 @@ if selected == "Test PostgreSQL":
 elif selected == "Transformations":
     st.title("Résultat des transformations du Consumer")
 
-    if st.button("🔄 Recharger les données"):
+    if st.button(" Recharger les données"):
         df = load_nutriscore_data()
-        st.success("✅ Données rechargées depuis PostgreSQL")
+        cat_df = load_category_data()
+        st.success(" Données rechargées depuis PostgreSQL")
     else:
         df = load_nutriscore_data()
+        cat_df = load_category_data()
 
     if not df.empty:
         st.write(f"{len(df)} lignes chargées depuis PostgreSQL.")
@@ -83,13 +97,34 @@ elif selected == "Transformations":
     else:
         st.warning("Aucune donnée à afficher pour `nutriscore_counts`.")
 
-# --------------------------------------------
-# Page 3 : À propos
-# --------------------------------------------
-elif selected == "À propos":
-    st.title("📘 À propos")
-    st.markdown("""
-    - **Projet** : Pipeline Kafka → Spark → PostgreSQL → Streamlit  
-    - **Visualisation** : Résultats affichés dynamiquement  
-    - **Auteur** : Ton Nom ✨
-    """)
+    # --------------------------------------------
+    # Ajout : Affichage des catégories principales (top 8 + Autres)
+    # --------------------------------------------
+    st.markdown("### Répartition des produits par catégorie Principale")
+
+    if not cat_df.empty:
+        top_n = 8
+        top = cat_df.nlargest(top_n, "category_count").copy()
+        other_sum = cat_df["category_count"].sum() - top["category_count"].sum()
+
+        if other_sum > 0:
+            autres = pd.DataFrame([{
+                "main_category": "Autres",
+                "category_count": other_sum
+            }])
+            donut_df = pd.concat([top, autres])
+        else:
+            donut_df = top
+
+        fig2 = px.pie(
+            donut_df,
+            names="main_category",
+            values="category_count",
+            hole=0.4,
+            title="Top 8 des catégories principales"
+        )
+        fig2.update_traces(textinfo='percent+label')
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.warning("Aucune donnée à afficher pour `category_counts`.")
+
