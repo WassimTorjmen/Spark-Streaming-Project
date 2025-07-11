@@ -1,10 +1,12 @@
 version: "3.9"
 
 networks:
-  data:
-    name: spark-stack
+  backend-net:
+    name: backend-net
     driver: bridge
-    attachable: true         # utile pour un shell « docker run -it --network spark-stack … »
+  frontend-net:
+    name: frontend-net
+    driver: bridge
 
 volumes:
   zkdata: {}
@@ -16,7 +18,7 @@ services:
   zookeeper:
     image: bitnami/zookeeper:3.9
     container_name: zookeeper
-    networks: [data]
+    networks: [backend-net]
     volumes:
       - zkdata:/bitnami/zookeeper
     environment:
@@ -24,26 +26,28 @@ services:
     ports: ["2181:2181"]
 
   kafka:
-    build: ./Infra/kafka             # ← Dockerfile ci-dessus
+    build: ./Infra/kafka
     container_name: kafka
     depends_on: [zookeeper]
-    networks: [data]
+    networks: [backend-net]
     volumes:
       - kafka-logs:/tmp/kafka-logs
     ports: ["9092:9092"]
-    environment:                     # uniquement JVM / tuning
+    environment:
       KAFKA_HEAP_OPTS: "-Xmx1g"
 
   postgres:
     image: postgres:15
     container_name: postgres
-    networks: [data]
+    networks:
+      - backend-net
+      - frontend-net
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./Infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
-      POSTGRES_DB:       openfood
-      POSTGRES_USER:     ingest
+      POSTGRES_DB: openfood
+      POSTGRES_USER: ingest
       POSTGRES_PASSWORD: ingestpwd
     ports: ["5433:5432"]
 
@@ -53,12 +57,12 @@ services:
       dockerfile: src/main/scala/com/esgi/Producer/Dockerfile
     container_name: producer
     depends_on: [kafka]
-    networks: [data]
+    networks: [backend-net]
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092   # ← même réseau
-      USE_API:           "true"
-      BATCH_LENGTH:      "100"
-      MAX_OFFSET:        "3808300"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      USE_API: "true"
+      BATCH_LENGTH: "100"
+      MAX_OFFSET: "3808300"
     volumes:
       - ./data:/app/data
 
@@ -68,12 +72,22 @@ services:
       dockerfile: src/main/scala/com/esgi/Consumer/Dockerfile
     container_name: consumer
     depends_on: [kafka, postgres]
-    networks: [data]
+    networks: [backend-net]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      CHECKPOINT_PATH:        /checkpoint/generic
-      PG_URL:                 jdbc:postgresql://postgres:5432/openfood
-      PG_USER:                ingest
-      PG_PWD:                 ingestpwd
+      CHECKPOINT_PATH: /checkpoint/generic
+      PG_URL: jdbc:postgresql://postgres:5432/openfood
+      PG_USER: ingest
+      PG_PWD: ingestpwd
     volumes:
       - checkpoint:/checkpoint
+
+  streamlit:
+    build:
+      context: ./streamlit
+      dockerfile: Dockerfile
+    container_name: streamlit
+    depends_on: [postgres]
+    networks: [frontend-net]
+    ports:
+      - "8501:8501"

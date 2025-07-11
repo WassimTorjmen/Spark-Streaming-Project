@@ -11,7 +11,7 @@ object ConsumerKafka {
   val apiResponseSchema = new StructType()
     .add("rows", ArrayType(
       new StructType()
-        .add("row", 
+        .add("row",
           new StructType()
             .add("nutriscore_grade", StringType)
             .add("categories_tags", ArrayType(StringType))
@@ -40,49 +40,72 @@ object ConsumerKafka {
       .option("failOnDataLoss", "false")
       .load()
 
-    // Transform data without grouping, just explode and clean
-    val baseDF = rawStream
+    // Parse and extract JSON structure
+    val parsedStream = rawStream
       .select(from_json(col("value").cast("string"), apiResponseSchema).as("data"))
       .select(explode(col("data.rows")).as("row"))
       .select("row.row.*")
 
-    // Write to PostgreSQL in foreachBatch
-    val query = baseDF.writeStream
+    // Apply the two transformations
+    val transformedStream = parsedStream.transform(applyTransformations)
+    val categoryStream = parsedStream.transform(applyCategoryAggregation)
+
+    // Write NutriScore aggregation
+    val query = transformedStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
-        println(s"=== Batch $batchId ===")
-
-        // Nutriscore counts
-        val nutriscoreDF = batchDF
-          .withColumn("nutriscore", 
-            when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
-            .otherwise("UNKNOWN"))
-          .filter($"nutriscore_grade".isNotNull)
-          .groupBy("nutriscore")
-          .agg(count("*").as("product_count"))
-
-        println("Nutriscore counts:")
-        nutriscoreDF.show(1000, truncate = false)
-        writeToPostgres(nutriscoreDF, "nutriscore_counts")
-
-        // Categories counts
-        val categoriesDF = batchDF
-          .withColumn("category", explode($"categories_tags"))
-          .filter($"category".isNotNull && !$"category".isin("en:null", "null"))
-          .withColumn("category", regexp_replace($"category", "en:", ""))
-          .groupBy("category")
-          .agg(count("*").as("product_count"))
-
-        println("Category counts:")
-        categoriesDF.show(1000, truncate = false)
-        writeToPostgres(categoriesDF, "categories_counts") // ✅ CORRIGÉ ICI
+        println(s"=== Nutriscore Batch $batchId ===")
+        batchDF.show(1000, truncate = false)
+        writeToPostgres(batchDF, "nutriscore_counts")
       }
-      .outputMode("update")
-      .option("checkpointLocation", checkpoint)
+      .outputMode("complete")
+      .option("checkpointLocation", checkpoint + "/nutriscore")
+      .start()
+
+    // Write Category aggregation
+    val query2 = categoryStream.writeStream
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        println(s"=== Category Batch $batchId ===")
+        batchDF.show(1000, truncate = false)
+        writeToPostgres(batchDF, "category_counts")
+      }
+      .outputMode("complete")
+      .option("checkpointLocation", checkpoint + "/category")
       .start()
 
     query.awaitTermination()
+    query2.awaitTermination()
   }
 
+  // --- NutriScore Transformation ---
+  def applyTransformations(df: DataFrame): DataFrame = {
+    val spark = SparkSession.getActiveSession.get
+    import spark.implicits._
+
+    val transformed = df
+      .withColumn("nutriscore",
+        when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
+          .otherwise("UNKNOWN"))
+      .filter($"nutriscore_grade".isNotNull)
+      .select("nutriscore")
+
+    transformed
+      .groupBy("nutriscore")
+      .agg(count("*").as("product_count"))
+  }
+
+  // --- Category Count Transformation --- "On est en train de calculer combien de produits partagent la même catégorie principale."
+  def applyCategoryAggregation(df: DataFrame): DataFrame = {
+    val spark = SparkSession.getActiveSession.get
+    import spark.implicits._
+
+    df
+      .withColumn("main_category", $"categories_tags".getItem(0))
+      .filter($"main_category".isNotNull)
+      .groupBy("main_category")
+      .agg(count("*").as("category_count"))
+  }
+
+  // --- PostgreSQL Generic Writer ---
   def writeToPostgres(df: DataFrame, tableName: String): Unit = {
     val jdbcUrl = sys.env("PG_URL")
     val dbProps = new Properties()
@@ -91,7 +114,7 @@ object ConsumerKafka {
     dbProps.setProperty("driver", "org.postgresql.Driver")
 
     df.write
-      .mode("overwrite") // ou "append" si tu veux cumuler les données
+      .mode("overwrite")
       .jdbc(jdbcUrl, tableName, dbProps)
   }
 }
