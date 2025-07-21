@@ -1,36 +1,44 @@
 -- Table 1 : Répartition par Nutriscore
 CREATE TABLE IF NOT EXISTS nutriscore_counts (
-  nutriscore VARCHAR(10) PRIMARY KEY,
+  nutriscore VARCHAR(10) ,
   product_count INTEGER
 );
 
 -- Table 2 : Répartition par catégorie principale
 CREATE TABLE IF NOT EXISTS category_counts (
-  main_category VARCHAR(255) PRIMARY KEY,
+  main_category VARCHAR(255) ,
   category_count INTEGER
 );
 
 
 -- Table 1 : Répartition par Nutriscore
 CREATE TABLE IF NOT EXISTS nutriscore_counts (
-  nutriscore VARCHAR(10) PRIMARY KEY,
+  nutriscore VARCHAR(10) ,
   product_count INTEGER
 );
 
 -- Table 2 : Répartition par catégorie principale
 CREATE TABLE IF NOT EXISTS category_counts (
-  main_category VARCHAR(255) PRIMARY KEY,
+  main_category VARCHAR(255) ,
   category_count INTEGER
 );
 
 -- Table 3 : Nombre de produits par marque
 CREATE TABLE IF NOT EXISTS brand_counts (
-  brand VARCHAR(255) PRIMARY KEY,
+  brand VARCHAR(255) ,
   product_count INTEGER
 );
 
 -- Table 4 : Répartition par type d’emballage
 CREATE TABLE IF NOT EXISTS packaging_distribution (
-  packaging VARCHAR(255) PRIMARY KEY,
+  packaging VARCHAR(255) ,
   packaging_count INTEGER
+);
+
+-- Table 5 : Produits avec le plus d’additifs
+CREATE TABLE IF NOT EXISTS top_additive_products (
+  product_name VARCHAR(255),
+  additive_count INTEGER,
+  most_common_additive VARCHAR(255),
+  batch_id INTEGER
 );

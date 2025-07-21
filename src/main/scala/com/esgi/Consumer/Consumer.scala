@@ -7,7 +7,8 @@ import org.apache.spark.sql.types._
 import java.util.Properties
 
 object ConsumerKafka {
-  // Define schema for the complete API response
+  private val globalWriteLock = new Object
+
   val apiResponseSchema = new StructType()
     .add("rows", ArrayType(
       new StructType()
@@ -15,8 +16,19 @@ object ConsumerKafka {
           new StructType()
             .add("nutriscore_grade", StringType)
             .add("categories_tags", ArrayType(StringType))
+            .add("nutriments", ArrayType(
+              new StructType()
+                .add("name", StringType)
+                .add("value", DoubleType)
+            ))
+            .add("product_name", ArrayType(
+              new StructType()
+                .add("lang", StringType)
+                .add("text", StringType)
+            ))
             .add("packaging_tags", ArrayType(StringType))
             .add("brands_tags", ArrayType(StringType))
+            .add("additives_tags", ArrayType(StringType))
         )
     ))
 
@@ -33,7 +45,6 @@ object ConsumerKafka {
     import spark.implicits._
     spark.sparkContext.setLogLevel("WARN")
 
-    // Read from Kafka
     val rawStream = spark.readStream
       .format("kafka")
       .option("kafka.bootstrap.servers", bootstrap)
@@ -42,19 +53,30 @@ object ConsumerKafka {
       .option("failOnDataLoss", "false")
       .load()
 
-    // Parse and extract JSON structure
     val parsedStream = rawStream
       .select(from_json(col("value").cast("string"), apiResponseSchema).as("data"))
       .select(explode(col("data.rows")).as("row"))
       .select("row.row.*")
 
-    // Apply transformations
     val transformedStream = parsedStream.transform(applyTransformations)
     val categoryStream = parsedStream.transform(applyCategoryAggregation)
+    val sugaryPerCategoryStream = parsedStream.transform(applyTopSugaryProductsByCategory)
     val brandStream = parsedStream.transform(applyBrandAggregation)
     val packagingStream = parsedStream.transform(applyPackagingDistribution)
+    
+    // 🔹 Additive stream (pas d’agrégation ici)
+    val additiveStream = parsedStream.transform(df => {
+      val spark = SparkSession.getActiveSession.get
+      import spark.implicits._
 
-    // Nutriscore count
+      df
+        .withColumn("product_name_entry", explode($"product_name"))
+        .filter($"product_name_entry.lang" === "main")
+        .withColumn("product_name", $"product_name_entry.text")
+        .withColumn("additive", explode_outer($"additives_tags"))
+        .select("product_name", "additive")
+    })
+
     val query = transformedStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Nutriscore Batch $batchId ===")
@@ -65,7 +87,6 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/nutriscore")
       .start()
 
-    // Category count
     val query2 = categoryStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Category Batch $batchId ===")
@@ -76,8 +97,27 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/category")
       .start()
 
-    // Brand count
-    val query3 = brandStream.writeStream
+    val query3 = sugaryPerCategoryStream.writeStream
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        println(s"=== Top Sugary Products Per Category Batch $batchId ===")
+        val windowSpec = org.apache.spark.sql.expressions.Window
+          .partitionBy("main_category")
+          .orderBy($"sugar".desc)
+
+        val ranked = batchDF
+          .withColumn("rank", row_number().over(windowSpec))
+          .filter($"rank" === 1)
+          .drop("rank")
+          .withColumn("batch_id", lit(batchId))
+
+        ranked.show(1000, truncate = false)
+        appendToPostgres(ranked, "top_sugary_products_by_category")
+      }
+      .outputMode("append")
+      .option("checkpointLocation", checkpoint + "/top_sugary_per_category")
+      .start()
+
+    val query4 = brandStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Brand Batch $batchId ===")
         batchDF.show(1000, truncate = false)
@@ -87,8 +127,7 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/brand")
       .start()
 
-    // Packaging distribution
-    val query4 = packagingStream.writeStream
+    val query5 = packagingStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Packaging Batch $batchId ===")
         batchDF.show(1000, truncate = false)
@@ -98,35 +137,53 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/packaging")
       .start()
 
-    // Await termination of all queries
+    // 🔹 Additive query avec agrégation dans foreachBatch
+    val query6 = additiveStream.writeStream
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        println(s"=== Top Additive Products Batch $batchId ===")
+
+        val top = batchDF
+          .groupBy("product_name")
+          .agg(
+            count("*").as("additive_count"),
+            first("additive").as("most_common_additive")
+          )
+          .orderBy($"additive_count".desc)
+          .limit(10)
+          .withColumn("batch_id", lit(batchId))
+
+        top.show(10, truncate = false)
+        appendToPostgres(top, "top_additive_products")
+      }
+      .outputMode("append")
+      .option("checkpointLocation", checkpoint + "/top_additive_products")
+      .start()
+
     query.awaitTermination()
     query2.awaitTermination()
     query3.awaitTermination()
     query4.awaitTermination()
+    query5.awaitTermination()
+    query6.awaitTermination()
   }
 
-  // Nutriscore Transformation
   def applyTransformations(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
-
     val transformed = df
       .withColumn("nutriscore",
         when(lower($"nutriscore_grade").isin("a", "b", "c", "d", "e"), upper($"nutriscore_grade"))
           .otherwise("UNKNOWN"))
       .filter($"nutriscore_grade".isNotNull)
       .select("nutriscore")
-
     transformed
       .groupBy("nutriscore")
       .agg(count("*").as("product_count"))
   }
 
-  // Category Aggregation
   def applyCategoryAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
-
     df
       .withColumn("main_category", $"categories_tags".getItem(0))
       .filter($"main_category".isNotNull)
@@ -134,11 +191,28 @@ object ConsumerKafka {
       .agg(count("*").as("category_count"))
   }
 
-  // Brand Aggregation (NEW)
+  def applyTopSugaryProductsByCategory(df: DataFrame): DataFrame = {
+    val spark = SparkSession.getActiveSession.get
+    import spark.implicits._
+    val exploded = df
+      .withColumn("main_category", lower(trim($"categories_tags".getItem(0))))
+      .withColumn("nutriment", explode($"nutriments"))
+      .withColumn("product_name_entry", explode($"product_name"))
+    exploded
+      .filter(
+        $"nutriment.name" === "sugars" &&
+        $"product_name_entry.lang" === "main" &&
+        $"main_category".isNotNull &&
+        !$"main_category".isin("en:undefined", "en:null", "undefined", "null", "")
+      )
+      .withColumn("sugar", $"nutriment.value".cast("double"))
+      .withColumn("product_name", $"product_name_entry.text")
+      .select("main_category", "product_name", "sugar")
+  }
+
   def applyBrandAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
-
     df
       .withColumn("brand", $"brands_tags".getItem(0))
       .filter($"brand".isNotNull)
@@ -146,11 +220,9 @@ object ConsumerKafka {
       .agg(count("*").as("product_count"))
   }
 
-  // Packaging Aggregation (NEW)
   def applyPackagingDistribution(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
-
     df
       .withColumn("packaging", $"packaging_tags".getItem(0))
       .filter($"packaging".isNotNull)
@@ -158,16 +230,43 @@ object ConsumerKafka {
       .agg(count("*").as("packaging_count"))
   }
 
-  // PostgreSQL writer
-  def writeToPostgres(df: DataFrame, tableName: String): Unit = {
-    val jdbcUrl = sys.env("PG_URL")
-    val dbProps = new Properties()
-    dbProps.setProperty("user", sys.env("PG_USER"))
-    dbProps.setProperty("password", sys.env("PG_PWD"))
-    dbProps.setProperty("driver", "org.postgresql.Driver")
+  def writeToPostgres(df: DataFrame, tableName: String): Unit = globalWriteLock.synchronized {
+    try {
+      val jdbcUrl = sys.env("PG_URL")
+      val dbProps = new Properties()
+      dbProps.setProperty("user", sys.env("PG_USER"))
+      dbProps.setProperty("password", sys.env("PG_PWD"))
+      dbProps.setProperty("driver", "org.postgresql.Driver")
 
-    df.write
-      .mode("overwrite")
-      .jdbc(jdbcUrl, tableName, dbProps)
+      df.write
+        .mode("append")
+        .jdbc(jdbcUrl, tableName, dbProps)
+
+      println(s"[✓] Write to table: $tableName successful")
+    } catch {
+      case e: Exception =>
+        println(s"[✗] ERROR writing to $tableName: ${e.getMessage}")
+        e.printStackTrace()
+    }
+  }
+
+  def appendToPostgres(df: DataFrame, tableName: String): Unit = globalWriteLock.synchronized {
+    try {
+      val jdbcUrl = sys.env("PG_URL")
+      val dbProps = new Properties()
+      dbProps.setProperty("user", sys.env("PG_USER"))
+      dbProps.setProperty("password", sys.env("PG_PWD"))
+      dbProps.setProperty("driver", "org.postgresql.Driver")
+
+      df.write
+        .mode("append")
+        .jdbc(jdbcUrl, tableName, dbProps)
+
+      println(s"[✓] Append to table: $tableName successful")
+    } catch {
+      case e: Exception =>
+        println(s"[✗] ERROR appending to $tableName: ${e.getMessage}")
+        e.printStackTrace()
+    }
   }
 }

@@ -60,6 +60,26 @@ def load_packaging_data():
         st.error(f"Erreur lecture 'packaging_distribution' : {e}")
         return pd.DataFrame()
 
+def load_top_additives():
+    engine = get_engine()
+    if engine is None:
+        return pd.DataFrame()
+    try:
+        return pd.read_sql("SELECT * FROM top_additive_products", engine)
+    except Exception as e:
+        st.error(f"Erreur lecture 'top_additive_products' : {e}")
+        return pd.DataFrame()
+
+def load_top_sugary():
+    engine = get_engine()
+    if engine is None:
+        return pd.DataFrame()
+    try:
+        return pd.read_sql("SELECT * FROM top_sugary_products_by_category", engine)
+    except Exception as e:
+        st.error(f"Erreur lecture 'top_sugary_products_by_category' : {e}")
+        return pd.DataFrame()
+
 # --------------------------------------------
 # Menu principal
 # --------------------------------------------
@@ -97,12 +117,16 @@ elif selected == "Transformations":
         cat_df = load_category_data()
         brand_df = load_brand_data()
         pack_df = load_packaging_data()
+        add_df = load_top_additives()
+        sugar_df = load_top_sugary()
         st.success("Données rechargées depuis PostgreSQL")
     else:
         df = load_nutriscore_data()
         cat_df = load_category_data()
         brand_df = load_brand_data()
         pack_df = load_packaging_data()
+        add_df = load_top_additives()
+        sugar_df = load_top_sugary()
 
     if not df.empty:
         st.subheader("Répartition des produits par Nutriscore")
@@ -146,9 +170,24 @@ elif selected == "Transformations":
                     title="Top 10 types d'emballage")
         fig4.update_traces(textinfo='percent+label')
         st.plotly_chart(fig4, use_container_width=True)
-
     else:
         st.warning("Aucune donnée à afficher pour `packaging_distribution`.")
+
+    if not add_df.empty:
+        st.subheader("Top 10 produits contenant le plus d’additifs")
+        st.dataframe(add_df[["product_name", "additive_count", "most_common_additive"]].head(10),
+                     use_container_width=True)
+    else:
+        st.warning("Aucune donnée à afficher pour `top_additive_products`.")
+
+    if not sugar_df.empty:
+        st.subheader("Produit le plus sucré par catégorie")
+        fig5 = px.bar(sugar_df, x="main_category", y="sugar", color="product_name",
+                      title="Produit le plus sucré par catégorie",
+                      labels={"main_category": "Catégorie principale", "sugar": "Teneur en sucre (g)"})
+        st.plotly_chart(fig5, use_container_width=True)
+    else:
+        st.warning("Aucune donnée à afficher pour `top_sugary_products_by_category`.")
 
 # --------------------------------------------
 # Page 3 : À propos
