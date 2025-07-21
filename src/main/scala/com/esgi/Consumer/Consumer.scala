@@ -15,6 +15,16 @@ object ConsumerKafka {
           new StructType()
             .add("nutriscore_grade", StringType)
             .add("categories_tags", ArrayType(StringType))
+            .add("nutriments", ArrayType(
+              new StructType()
+                .add("name", StringType)
+                .add("value", DoubleType)
+            ))
+            .add("product_name", ArrayType(
+              new StructType()
+                .add("lang", StringType)
+                .add("text", StringType)
+            ))
         )
     ))
 
@@ -49,6 +59,7 @@ object ConsumerKafka {
     // Apply the two transformations
     val transformedStream = parsedStream.transform(applyTransformations)
     val categoryStream = parsedStream.transform(applyCategoryAggregation)
+    val sugaryPerCategoryStream = parsedStream.transform(applyTopSugaryProductsByCategory)
 
     // Write NutriScore aggregation
     val query = transformedStream.writeStream
@@ -72,8 +83,32 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/category")
       .start()
 
+  val query3 = sugaryPerCategoryStream.writeStream
+    .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+      println(s"=== Top Sugary Products Per Category Batch $batchId ===")
+
+      // Apply row_number window ranking here inside the batch context
+      val windowSpec = org.apache.spark.sql.expressions.Window
+        .partitionBy("main_category")
+        .orderBy($"sugar".desc)
+
+      val ranked = batchDF
+        .withColumn("rank", row_number().over(windowSpec))
+        .filter($"rank" === 1)
+        .drop("rank")
+        .withColumn("batch_id", lit(batchId)) 
+
+
+      ranked.show(1000, truncate = false)
+      appendToPostgres(ranked, "top_sugary_products_by_category")
+    }
+    .outputMode("append")
+    .option("checkpointLocation", checkpoint + "/top_sugary_per_category")
+    .start()
+
     query.awaitTermination()
     query2.awaitTermination()
+    query3.awaitTermination()
   }
 
   // --- NutriScore Transformation ---
@@ -93,7 +128,7 @@ object ConsumerKafka {
       .agg(count("*").as("product_count"))
   }
 
-  // --- Category Count Transformation --- "On est en train de calculer combien de produits partagent la même catégorie principale."
+  // --- Category Count Transformation ---
   def applyCategoryAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
@@ -105,8 +140,31 @@ object ConsumerKafka {
       .agg(count("*").as("category_count"))
   }
 
+  def applyTopSugaryProductsByCategory(df: DataFrame): DataFrame = {
+  val spark = SparkSession.getActiveSession.get
+  import spark.implicits._
+
+  val exploded = df
+    .withColumn("main_category", lower(trim($"categories_tags".getItem(0))))
+    .withColumn("nutriment", explode($"nutriments"))
+    .withColumn("product_name_entry", explode($"product_name"))
+
+  exploded
+    .filter(
+      $"nutriment.name" === "sugars" &&
+      $"product_name_entry.lang" === "main" &&
+      $"main_category".isNotNull &&
+      !$"main_category".isin("en:undefined", "en:null", "undefined", "null", "")
+    )
+    .withColumn("sugar", $"nutriment.value".cast("double"))
+    .withColumn("product_name", $"product_name_entry.text")
+    .select("main_category", "product_name", "sugar")
+}
+
   // --- PostgreSQL Generic Writer ---
-  def writeToPostgres(df: DataFrame, tableName: String): Unit = {
+ private val writeLock = new Object
+
+  def writeToPostgres(df: DataFrame, tableName: String): Unit = writeLock.synchronized {
     val jdbcUrl = sys.env("PG_URL")
     val dbProps = new Properties()
     dbProps.setProperty("user", sys.env("PG_USER"))
@@ -117,4 +175,17 @@ object ConsumerKafka {
       .mode("overwrite")
       .jdbc(jdbcUrl, tableName, dbProps)
   }
+
+  def appendToPostgres(df: DataFrame, tableName: String): Unit = writeLock.synchronized {
+    val jdbcUrl = sys.env("PG_URL")
+    val dbProps = new Properties()
+    dbProps.setProperty("user", sys.env("PG_USER"))
+    dbProps.setProperty("password", sys.env("PG_PWD"))
+    dbProps.setProperty("driver", "org.postgresql.Driver")
+
+    df.write
+      .mode("append")
+      .jdbc(jdbcUrl, tableName, dbProps)
+  }
+
 }
