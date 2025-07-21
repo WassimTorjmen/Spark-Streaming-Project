@@ -8,6 +8,9 @@ import java.util.Properties
 
 object ConsumerKafka {
   // Define schema for the complete API response
+
+  private val globalWriteLock = new Object
+
   val apiResponseSchema = new StructType()
     .add("rows", ArrayType(
       new StructType()
@@ -31,6 +34,7 @@ object ConsumerKafka {
     ))
 
   def main(args: Array[String]): Unit = {
+
     val bootstrap = sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     val checkpoint = sys.env.getOrElse("CHECKPOINT_PATH", "checkpoint/generic")
 
@@ -110,31 +114,9 @@ object ConsumerKafka {
     .option("checkpointLocation", checkpoint + "/top_sugary_per_category")
     .start()
 
-  val query3 = sugaryPerCategoryStream.writeStream
-    .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
-      println(s"=== Top Sugary Products Per Category Batch $batchId ===")
-
-      // Apply row_number window ranking here inside the batch context
-      val windowSpec = org.apache.spark.sql.expressions.Window
-        .partitionBy("main_category")
-        .orderBy($"sugar".desc)
-
-      val ranked = batchDF
-        .withColumn("rank", row_number().over(windowSpec))
-        .filter($"rank" === 1)
-        .drop("rank")
-        .withColumn("batch_id", lit(batchId)) 
-
-
-      ranked.show(1000, truncate = false)
-      appendToPostgres(ranked, "top_sugary_products_by_category")
-    }
-    .outputMode("append")
-    .option("checkpointLocation", checkpoint + "/top_sugary_per_category")
-    .start()
 
     // Brand count
-    val query3 = brandStream.writeStream
+    val query4 = brandStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Brand Batch $batchId ===")
         batchDF.show(1000, truncate = false)
@@ -145,7 +127,7 @@ object ConsumerKafka {
       .start()
 
     // Packaging distribution
-    val query4 = packagingStream.writeStream
+    val query5 = packagingStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Packaging Batch $batchId ===")
         batchDF.show(1000, truncate = false)
@@ -160,7 +142,7 @@ object ConsumerKafka {
     query2.awaitTermination()
     query3.awaitTermination()
     query4.awaitTermination()
-    query3.awaitTermination()
+    query5.awaitTermination()
   }
 
   // Nutriscore Transformation
@@ -212,12 +194,7 @@ object ConsumerKafka {
     .withColumn("product_name", $"product_name_entry.text")
     .select("main_category", "product_name", "sugar")
 }
-
-  // --- PostgreSQL Generic Writer ---
- private val writeLock = new Object
-
-  def writeToPostgres(df: DataFrame, tableName: String): Unit = writeLock.synchronized {
-  // Brand Aggregation (NEW)
+// Brand Aggregation (NEW)
   def applyBrandAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
@@ -241,8 +218,10 @@ object ConsumerKafka {
       .agg(count("*").as("packaging_count"))
   }
 
-  // PostgreSQL writer
-  def writeToPostgres(df: DataFrame, tableName: String): Unit = {
+  // --- PostgreSQL Generic Writer ---$
+
+ def writeToPostgres(df: DataFrame, tableName: String): Unit = globalWriteLock.synchronized {
+  try {
     val jdbcUrl = sys.env("PG_URL")
     val dbProps = new Properties()
     dbProps.setProperty("user", sys.env("PG_USER"))
@@ -250,11 +229,19 @@ object ConsumerKafka {
     dbProps.setProperty("driver", "org.postgresql.Driver")
 
     df.write
-      .mode("overwrite")
+      .mode("append") // ou "overwrite" si justifié
       .jdbc(jdbcUrl, tableName, dbProps)
-  }
 
-  def appendToPostgres(df: DataFrame, tableName: String): Unit = writeLock.synchronized {
+    println(s"[✓] Write to table: $tableName successful")
+  } catch {
+    case e: Exception =>
+      println(s"[✗] ERROR writing to $tableName: ${e.getMessage}")
+      e.printStackTrace()
+  }
+}
+
+def appendToPostgres(df: DataFrame, tableName: String): Unit = globalWriteLock.synchronized {
+  try {
     val jdbcUrl = sys.env("PG_URL")
     val dbProps = new Properties()
     dbProps.setProperty("user", sys.env("PG_USER"))
@@ -264,6 +251,14 @@ object ConsumerKafka {
     df.write
       .mode("append")
       .jdbc(jdbcUrl, tableName, dbProps)
+
+    println(s"[✓] Append to table: $tableName successful")
+  } catch {
+    case e: Exception =>
+      println(s"[✗] ERROR appending to $tableName: ${e.getMessage}")
+      e.printStackTrace()
   }
+}
+
 
 }
