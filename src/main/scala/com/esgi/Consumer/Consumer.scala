@@ -15,6 +15,8 @@ object ConsumerKafka {
           new StructType()
             .add("nutriscore_grade", StringType)
             .add("categories_tags", ArrayType(StringType))
+            .add("packaging_tags", ArrayType(StringType))
+            .add("brands_tags", ArrayType(StringType))
         )
     ))
 
@@ -46,11 +48,13 @@ object ConsumerKafka {
       .select(explode(col("data.rows")).as("row"))
       .select("row.row.*")
 
-    // Apply the two transformations
+    // Apply transformations
     val transformedStream = parsedStream.transform(applyTransformations)
     val categoryStream = parsedStream.transform(applyCategoryAggregation)
+    val brandStream = parsedStream.transform(applyBrandAggregation)
+    val packagingStream = parsedStream.transform(applyPackagingDistribution)
 
-    // Write NutriScore aggregation
+    // Nutriscore count
     val query = transformedStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Nutriscore Batch $batchId ===")
@@ -61,7 +65,7 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/nutriscore")
       .start()
 
-    // Write Category aggregation
+    // Category count
     val query2 = categoryStream.writeStream
       .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
         println(s"=== Category Batch $batchId ===")
@@ -72,11 +76,36 @@ object ConsumerKafka {
       .option("checkpointLocation", checkpoint + "/category")
       .start()
 
+    // Brand count
+    val query3 = brandStream.writeStream
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        println(s"=== Brand Batch $batchId ===")
+        batchDF.show(1000, truncate = false)
+        writeToPostgres(batchDF, "brand_counts")
+      }
+      .outputMode("complete")
+      .option("checkpointLocation", checkpoint + "/brand")
+      .start()
+
+    // Packaging distribution
+    val query4 = packagingStream.writeStream
+      .foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+        println(s"=== Packaging Batch $batchId ===")
+        batchDF.show(1000, truncate = false)
+        writeToPostgres(batchDF, "packaging_distribution")
+      }
+      .outputMode("complete")
+      .option("checkpointLocation", checkpoint + "/packaging")
+      .start()
+
+    // Await termination of all queries
     query.awaitTermination()
     query2.awaitTermination()
+    query3.awaitTermination()
+    query4.awaitTermination()
   }
 
-  // --- NutriScore Transformation ---
+  // Nutriscore Transformation
   def applyTransformations(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
@@ -93,21 +122,43 @@ object ConsumerKafka {
       .agg(count("*").as("product_count"))
   }
 
-  // --- Category Count Transformation --- "On est en train de calculer combien de produits partagent la même catégorie principale."
+  // Category Aggregation
   def applyCategoryAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
 
     df
       .withColumn("main_category", $"categories_tags".getItem(0))
-      .withColumn("main_category", lower(trim($"main_category")))  // Nettoyage
-      .filter($"main_category".isNotNull &&
-              !$"main_category".isin("en:undefined", "en:null", "undefined", "null", ""))
+      .filter($"main_category".isNotNull)
       .groupBy("main_category")
       .agg(count("*").as("category_count"))
   }
 
-  // --- PostgreSQL Generic Writer ---
+  // Brand Aggregation (NEW)
+  def applyBrandAggregation(df: DataFrame): DataFrame = {
+    val spark = SparkSession.getActiveSession.get
+    import spark.implicits._
+
+    df
+      .withColumn("brand", $"brands_tags".getItem(0))
+      .filter($"brand".isNotNull)
+      .groupBy("brand")
+      .agg(count("*").as("product_count"))
+  }
+
+  // Packaging Aggregation (NEW)
+  def applyPackagingDistribution(df: DataFrame): DataFrame = {
+    val spark = SparkSession.getActiveSession.get
+    import spark.implicits._
+
+    df
+      .withColumn("packaging", $"packaging_tags".getItem(0))
+      .filter($"packaging".isNotNull)
+      .groupBy("packaging")
+      .agg(count("*").as("packaging_count"))
+  }
+
+  // PostgreSQL writer
   def writeToPostgres(df: DataFrame, tableName: String): Unit = {
     val jdbcUrl = sys.env("PG_URL")
     val dbProps = new Properties()
