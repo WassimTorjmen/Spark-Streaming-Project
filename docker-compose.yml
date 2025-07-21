@@ -37,19 +37,28 @@ services:
       KAFKA_HEAP_OPTS: "-Xmx1g"
 
   postgres:
-    image: postgres:15
-    container_name: postgres
+    image: postgres:15                         # Utilise l'image officielle PostgreSQL version 15
+    container_name: postgres                   # Nom explicite pour le conteneur (facilite les commandes docker)
+    
     networks:
-      - backend-net
-      - frontend-net
+      - backend-net                            # Le conteneur appartient à deux réseaux :
+      - frontend-net                           # Cela permet à plusieurs services (par exemple Streamlit & Kafka) d'y accéder
+    
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data        # Volume pour persister les données (même après arrêt du conteneur)
       - ./Infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+                                               # Script SQL de création/initialisation exécuté au 1er lancement
+                                               # ":ro" signifie "read-only" (sécurisé)
+    
     environment:
-      POSTGRES_DB: openfood
-      POSTGRES_USER: ingest
-      POSTGRES_PASSWORD: ingestpwd
-    ports: ["5433:5432"]
+      POSTGRES_DB: openfood                    # Nom de la base de données à créer au démarrage
+      POSTGRES_USER: ingest                    # Nom d'utilisateur PostgreSQL
+      POSTGRES_PASSWORD: ingestpwd             # Mot de passe de l'utilisateur
+    
+    ports:
+      - "5433:5432"                            # Mappe le port 5432 du conteneur (par défaut PostgreSQL)
+                                               # vers le port 5433 de ta machine hôte (évite conflit local)
+
 
   producer:
     build:
@@ -84,10 +93,10 @@ services:
 
   streamlit:
     build:
-      context: ./streamlit
-      dockerfile: Dockerfile
-    container_name: streamlit
-    depends_on: [postgres]
-    networks: [frontend-net]
+      context: ./streamlit # Dossier source contenant le Dockerfile et les fichiers à copier
+      dockerfile: Dockerfile  # Nom du Dockerfile utilisé (dans ./streamlit)
+    container_name: streamlit # Nom explicite du conteneur (évite un nom auto-généré)
+    depends_on: [postgres]  #Attend que le conteneur PostgreSQL soit lancé avant de démarrer
+    networks: [frontend-net]  # Le conteneur est connecté au réseau nommé `frontend-net`
     ports:
       - "8501:8501"
