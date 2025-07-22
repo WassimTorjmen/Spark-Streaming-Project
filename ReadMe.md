@@ -1,5 +1,5 @@
-pour lancer le producer :
-mvn compile exec:java "-Dexec.mainClass=com.esgi.ProducerKafka"
+Prérequis : avoir docker sur son machine
 
-pour lancer le consumer : 
-mvn compile exec:java "-Dexec.mainClass=com.esgi.ConsumerKafka" 
+*Télécharger ou cloner le repo
+**Se positionner dans le dossier Spark-streaming-project
+***Lancer docker compose up -d
