@@ -42,3 +42,16 @@ CREATE TABLE IF NOT EXISTS top_additive_products (
   most_common_additive VARCHAR(255),
   batch_id INTEGER
 );
+-- Table 6 : Produits avec le plus de sucre par catégorie
+
+CREATE TABLE IF NOT EXISTS top_sugary_products_by_category (
+  main_category VARCHAR(255),
+  product_name VARCHAR(255),
+  sugar DOUBLE PRECISION,
+  batch_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS nova_group_classification (
+  nova_group      INT,
+  nova_label      VARCHAR(255),
+  product_count   INT
+);
