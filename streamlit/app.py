@@ -4,85 +4,26 @@ import pandas as pd
 import sqlalchemy
 import plotly.express as px
 
-# --------------------------------------------
 # Connexion PostgreSQL
-# --------------------------------------------
 def get_engine():
     try:
-        engine = sqlalchemy.create_engine(
+        return sqlalchemy.create_engine(
             "postgresql://ingest:ingestpwd@postgres:5432/openfood"
         )
-        return engine
     except Exception as e:
         st.error(f"Erreur de connexion : {e}")
         return None
 
-# --------------------------------------------
-# Charger les résultats des transformations
-# --------------------------------------------
-def load_nutriscore_data():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
+# Lecture d'une table PostgreSQL
+def load_table(name):
     try:
-        return pd.read_sql("SELECT * FROM nutriscore_counts", engine)
+        engine = get_engine()
+        return pd.read_sql(f"SELECT * FROM {name}", engine)
     except Exception as e:
-        st.error(f"Erreur lecture 'nutriscore_counts' : {e}")
+        st.error(f"Erreur lecture '{name}' : {e}")
         return pd.DataFrame()
 
-def load_category_data():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM category_counts", engine)
-    except Exception as e:
-        st.error(f"Erreur lecture 'category_counts' : {e}")
-        return pd.DataFrame()
-
-def load_brand_data():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM brand_counts", engine)
-    except Exception as e:
-        st.error(f"Erreur lecture 'brand_counts' : {e}")
-        return pd.DataFrame()
-
-def load_packaging_data():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM packaging_distribution", engine)
-    except Exception as e:
-        st.error(f"Erreur lecture 'packaging_distribution' : {e}")
-        return pd.DataFrame()
-
-def load_top_additives():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM top_additive_products", engine)
-    except Exception as e:
-        st.error(f"Erreur lecture 'top_additive_products' : {e}")
-        return pd.DataFrame()
-
-def load_top_sugary():
-    engine = get_engine()
-    if engine is None:
-        return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM top_sugary_products_by_category", engine)
-    except Exception as e:
-        st.error(f"Erreur lecture 'top_sugary_products_by_category' : {e}")
-        return pd.DataFrame()
-
-# --------------------------------------------
-# Menu principal
-# --------------------------------------------
+# Menu latéral
 with st.sidebar:
     selected = option_menu(
         menu_title="Dashboard",
@@ -91,107 +32,79 @@ with st.sidebar:
         default_index=0,
     )
 
-# --------------------------------------------
-# Page 1 : Test PostgreSQL
-# --------------------------------------------
+# Page 1 : Test de connexion
 if selected == "Test PostgreSQL":
     st.title("Connexion à PostgreSQL")
-    engine = get_engine()
-    if engine:
-        try:
-            with engine.connect():
-                st.success("Connexion réussie à PostgreSQL")
-        except Exception as e:
-            st.error(f"Connexion échouée : {e}")
-    else:
-        st.warning("Impossible d'établir une connexion.")
+    try:
+        with get_engine().connect():
+            st.success("Connexion réussie à PostgreSQL")
+    except Exception as e:
+        st.error(f"Connexion échouée : {e}")
 
-# --------------------------------------------
 # Page 2 : Transformations
-# --------------------------------------------
 elif selected == "Transformations":
-    st.title("Résultat des transformations du Consumer")
+    st.title("Résultat des transformations")
 
     if st.button("🔄 Recharger les données"):
-        df = load_nutriscore_data()
-        cat_df = load_category_data()
-        brand_df = load_brand_data()
-        pack_df = load_packaging_data()
-        add_df = load_top_additives()
-        sugar_df = load_top_sugary()
-        st.success("Données rechargées depuis PostgreSQL")
-    else:
-        df = load_nutriscore_data()
-        cat_df = load_category_data()
-        brand_df = load_brand_data()
-        pack_df = load_packaging_data()
-        add_df = load_top_additives()
-        sugar_df = load_top_sugary()
+        st.session_state["df"] = load_table("nutriscore_counts")
+        st.session_state["cat_df"] = load_table("category_counts")
+        st.session_state["brand_df"] = load_table("brand_counts")
+        st.session_state["pack_df"] = load_table("packaging_distribution")
+        st.session_state["add_df"] = load_table("top_additive_products")
+        st.session_state["sugar_df"] = load_table("top_sugary_products_by_category")
+
+    df = st.session_state.get("df", pd.DataFrame())
+    cat_df = st.session_state.get("cat_df", pd.DataFrame())
+    brand_df = st.session_state.get("brand_df", pd.DataFrame())
+    pack_df = st.session_state.get("pack_df", pd.DataFrame())
+    add_df = st.session_state.get("add_df", pd.DataFrame())
+    sugar_df = st.session_state.get("sugar_df", pd.DataFrame())
 
     if not df.empty:
         st.subheader("Répartition des produits par Nutriscore")
-        fig = px.bar(df, x="nutriscore", y="product_count",
-                     color="nutriscore",
-                     title="Nombre de produits par Nutriscore")
+        fig = px.bar(df, x="nutriscore", y="product_count", color="nutriscore")
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `nutriscore_counts`.")
 
     if not cat_df.empty:
         st.subheader("Top 8 des catégories principales")
-        top_n = 8
-        top = cat_df.nlargest(top_n, "category_count").copy()
-        other_sum = cat_df["category_count"].sum() - top["category_count"].sum()
-        if other_sum > 0:
-            autres = pd.DataFrame([{"main_category": "Autres", "category_count": other_sum}])
-            donut_df = pd.concat([top, autres])
-        else:
-            donut_df = top
+        top = cat_df.nlargest(8, "category_count").copy()
+        autres = pd.DataFrame([{
+            "main_category": "Autres",
+            "category_count": cat_df["category_count"].sum() - top["category_count"].sum()
+        }])
+        donut_df = pd.concat([top, autres])
         fig2 = px.pie(donut_df, names="main_category", values="category_count", hole=0.4)
         fig2.update_traces(textinfo='percent+label')
         st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `category_counts`.")
 
     if not brand_df.empty:
-        st.subheader("Nombre de produits par marque")
+        st.subheader("Top 10 marques par nombre de produits")
         top_brands = brand_df.sort_values("product_count", ascending=False).head(10)
-        fig3 = px.bar(top_brands, x="brand", y="product_count",
-                      title="Top 10 marques par nombre de produits",
-                      labels={"brand": "Marque", "product_count": "Nombre de produits"})
+        fig3 = px.bar(top_brands, x="brand", y="product_count")
         st.plotly_chart(fig3, use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `brand_counts`.")
 
     if not pack_df.empty:
-        st.subheader("Répartition des 10 types d'emballage les plus fréquents")
-        top_packaging = pack_df.sort_values("packaging_count", ascending=False).head(10)
-        fig4 = px.pie(top_packaging, names="packaging", values="packaging_count", hole=0.3,
-                    title="Top 10 types d'emballage")
+        st.subheader("Top 10 types d'emballage")
+        top_pack = pack_df.sort_values("packaging_count", ascending=False).head(10)
+        fig4 = px.pie(top_pack, names="packaging", values="packaging_count", hole=0.3)
         fig4.update_traces(textinfo='percent+label')
         st.plotly_chart(fig4, use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `packaging_distribution`.")
 
     if not add_df.empty:
-        st.subheader("Top 10 produits contenant le plus d’additifs")
-        st.dataframe(add_df[["product_name", "additive_count", "most_common_additive"]].head(10),
-                     use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `top_additive_products`.")
+        st.subheader("Top 10 produits avec le plus d'additifs")
+        st.dataframe(add_df[["product_name", "additive_count", "most_common_additive"]].head(10), use_container_width=True)
 
     if not sugar_df.empty:
         st.subheader("Produit le plus sucré par catégorie")
-        fig5 = px.bar(sugar_df, x="main_category", y="sugar", color="product_name",
-                      title="Produit le plus sucré par catégorie",
-                      labels={"main_category": "Catégorie principale", "sugar": "Teneur en sucre (g)"})
-        st.plotly_chart(fig5, use_container_width=True)
-    else:
-        st.warning("Aucune donnée à afficher pour `top_sugary_products_by_category`.")
+        sugar_df_sorted = sugar_df.sort_values(by=["main_category", "sugar"], ascending=[True, False])
+        sugar_df_sorted = sugar_df_sorted.rename(columns={
+            "main_category": "Catégorie",
+            "product_name": "Nom du produit",
+            "sugar": "Sucre (g)"
+        })
+        st.dataframe(sugar_df_sorted, use_container_width=True)
 
-# --------------------------------------------
 # Page 3 : À propos
-# --------------------------------------------
 elif selected == "À propos":
     st.title("À propos du projet")
-    st.write("Cette application Streamlit permet de visualiser les transformations réalisées à partir des données Open Food Facts, traitées en temps réel via Apache Kafka, Spark Structured Streaming et stockées dans PostgreSQL.")
+    st.write("Cette application Streamlit permet de visualiser les transformations effectuées sur les données Open Food Facts à l'aide de Kafka, Spark et PostgreSQL.")

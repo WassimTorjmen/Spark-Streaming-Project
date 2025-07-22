@@ -184,12 +184,17 @@ object ConsumerKafka {
   def applyCategoryAggregation(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
     import spark.implicits._
+
     df
-      .withColumn("main_category", $"categories_tags".getItem(0))
-      .filter($"main_category".isNotNull)
+      .filter(size($"categories_tags") > 0) // Vérifie que la liste existe et n’est pas vide
+      .withColumn("main_category_raw", $"categories_tags".getItem(0))
+      .withColumn("main_category", lower(trim($"main_category_raw")))
+      .filter($"main_category".isNotNull &&
+              !$"main_category".isin("en:undefined", "en:null", "undefined", "null", ""))
       .groupBy("main_category")
       .agg(count("*").as("category_count"))
   }
+
 
   def applyTopSugaryProductsByCategory(df: DataFrame): DataFrame = {
     val spark = SparkSession.getActiveSession.get
@@ -239,7 +244,7 @@ object ConsumerKafka {
       dbProps.setProperty("driver", "org.postgresql.Driver")
 
       df.write
-        .mode("append")
+        .mode("overwrite")
         .jdbc(jdbcUrl, tableName, dbProps)
 
       println(s"[✓] Write to table: $tableName successful")
