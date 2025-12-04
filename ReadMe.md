@@ -1,364 +1,377 @@
-# Spark Streaming Project
+# 🚀 **Spark Streaming Project — Pipeline de traitement de données en temps réel**
 
-## 📋 À propos du projet
+## 📌 **Description**
 
-**Spark Streaming Project** est une application de traitement de données en temps réel utilisant Apache Spark.  Ce projet combine la puissance de **Scala** (54.6%) pour le traitement de données haute performance, **Python** (29.3%) pour l'orchestration et l'analyse, et **Docker** (16.1%) pour la containerisation et le déploiement.
+Spark Streaming Project est une plateforme de traitement de données en temps réel qui collecte, transforme et analyse des données alimentaires provenant de l'API OpenFood. Le projet combine **Apache Spark Streaming** pour le traitement haute performance, **Kafka** pour l'ingestion de flux, **PostgreSQL** pour le stockage persistant, et **Streamlit** pour la visualisation interactive.
 
-## 🚀 Caractéristiques principales
-
-### ⚡ Traitement de données en temps réel avec Apache Spark Streaming
-
-Spark Streaming permet de traiter des flux de données continus avec très faible latence :
-
-- **Micro-batching** : Divise le flux de données en petits lots pour un traitement efficace
-- **Basse latence** : Latence de quelques secondes pour les résultats
-- **Haute throughput** : Traite des millions d'événements par seconde
-- **Stateful processing** : Maintient l'état entre les micro-batches pour les agrégations complexes
-- **Support multi-sources** : 
-  - Kafka, Kinesis, Flume (sources natives)
-  - TCP sockets
-  - Sources personnalisées via l'API DStream
-- **Garanties de délivrance** :
-  - At-least-once semantics
-  - Exactly-once pour certaines opérations
-  - Récupération automatique en cas de défaillance
-
-### Cas d'usage supportés
-
-- **Agrégation en temps réel** : Calcul de moyennes, sommes, comptages continus
-- **Détection d'anomalies** : Identification de patterns anormaux dans les flux
-- **Join de flux** : Corrélation de données provenant de multiples sources
-- **Fenêtrage temporel** : Sliding windows, tumbling windows
-- **Stateful transformations** : MapWithState, UpdateStateByKey pour les opérations complexes
-
-```scala
-// Exemple : Agrégation sur fenêtre glissante
-val windowedWordCounts = words
-  .map(word => (word, 1))
-  .reduceByKeyAndWindow(
-    (a: Int, b: Int) => a + b,
-    Seconds(60),      // Fenêtre de 60 secondes
-    Seconds(10)       // Slide toutes les 10 secondes
-  )
-```
+Le projet combine **streaming de données**, **architecture microservices**, **traitement distribué** et **déploiement via Docker**. 
 
 ---
 
-### 🐍 Scripts Python pour l'orchestration et l'analyse
+## 🎯 **Objectif du projet**
 
-Une couche Python complète pour compléter Scala :
-
-#### **Orchestration des jobs Spark**
-- Gestion des workflows Spark depuis Python
-- Soumission dynamique des jobs avec pyspark
-- Configuration flexible des paramètres
-- Gestion des dépendances et des étapes
-
-#### **Traitement et nettoyage des données**
-- **Pandas** : Manipulation et transformation des données
-- **NumPy** : Opérations numériques avancées
-- **PySpark DataFrames** : Traitement parallèle de grandes volumes
-- Nettoyage, validation et normalisation des données
-
-#### **Analyse statistique**
-- **SciPy** : Statistiques avancées
-- **Scikit-learn** : Machine Learning (clustering, classification, régression)
-- Analyse exploratoire des données (EDA)
-- Rapports statistiques automatisés
-
-#### **Visualisation et monitoring**
-- Dashboards interactifs avec **Streamlit**
-- Graphiques en temps réel avec **Plotly/Matplotlib**
-- Métriques de performance et logs
-- Alertes et notifications
-
-```python
-# Exemple : Pipeline d'analyse Python
-import pyspark.sql.functions as F
-from pyspark.sql import SparkSession
-
-spark = SparkSession.builder.appName("AnalysisPipeline").getOrCreate()
-
-# Charger et traiter les données
-df = spark.read.parquet("s3://bucket/data")
-result = df.filter(F.col("value") > 100) \
-    .groupBy("category") \
-    .agg(F.avg("amount").alias("avg_amount"))
-
-# Visualiser avec Streamlit
-import streamlit as st
-st.dataframe(result. toPandas())
-```
-
-#### **Intégration avec des services externes**
-- APIs REST pour récupérer/envoyer des données
-- Connexion à des bases de données (PostgreSQL, MongoDB, etc.)
-- Interaction avec le cloud (AWS S3, Azure Blob, GCP)
-- Webhooks et notifications
+* Collecter des données en temps réel depuis l'API OpenFood. 
+* Traiter et transformer les flux de données avec Apache Spark Streaming.
+* Stocker les données traitées dans PostgreSQL.
+* Visualiser les résultats via un dashboard Streamlit interactif.
+* Offrir une infrastructure complète, scalable et facilement déployable.
 
 ---
 
-### 🐳 Infrastructure Docker pour déploiement facile
+## 🧠 **Contexte & Problématique**
 
-Une architecture containerisée complète pour simplifier le déploiement :
+L'analyse de données alimentaires à grande échelle nécessite un pipeline robuste capable de :
+- Gérer des volumes importants de données en continu.
+- Assurer une faible latence entre l'ingestion et l'analyse.
+- Offrir une visualisation en temps réel des résultats. 
 
-#### **Avantages du déploiement Docker**
-- ✅ **Reproductibilité** : Même environnement sur tous les serveurs
-- ✅ **Isolation** : Services indépendants sans conflits de dépendances
-- ✅ **Scalabilité** : Lancer plusieurs instances facilement
-- ✅ **Portabilité** : Fonctionne sur Windows, Mac, Linux, Cloud
-- ✅ **Versioning** : Tracer les versions d'infrastructure
+Spark Streaming Project résout ce problème en :
 
-#### **Architecture multi-conteneurs**
-
-```
-┌─────────────────────────────────────────────────────────┐
-│            Docker Compose Orchestration                 │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌──────────────────┐  ┌──────────────────────┐        │
-│  │ Spark Master     │  │ Spark Worker (x2+)   │        │
-│  │ - Port 8080      │  │ - Dynamic ports      │        │
-│  │ - REST API       │  │ - Auto-scaling       │        │
-│  └──────────────────┘  └──────────────────────┘        │
-│           │                     │                      │
-│           └─────────┬───────────┘                       │
-│                     │                                   │
-│  ┌──────────────┐   │   ┌──────────────────────┐       │
-│  │ Kafka/Data   │◄──┴──►│ Streamlit Dashboard  │       │
-│  │ Source       │       │ - Port 8501          │       │
-│  └──────────────┘       └──────────────────────┘       │
-│           │                                            │
-│           ▼                                            │
-│  ┌──────────────────────────────┐                      │
-│  │ PostgreSQL/MongoDB           │                      │
-│  │ - Persistence                │                      │
-│  │ - Port 5432/27017           │                      │
-│  └──────────────────────────────┘                      │
-│                                                        │
-└─────────────────────────────────────────────────────────┘
-```
-
-#### **Configurations Docker disponibles**
-
-**Services inclus :**
-- **Spark Master** : Coordonne les jobs et les ressources
-- **Spark Workers** : Exécutent les tâches en parallèle
-- **Kafka** (optionnel) : Source de données en temps réel
-- **PostgreSQL/MongoDB** : Stockage persistant
-- **Streamlit** : Interface web interactive
-- **JupyterLab** (optionnel) : Développement et prototypage
-
-**Avantages de cette approche :**
-- Tous les services démarrent automatiquement
-- Networking automatique entre conteneurs
-- Partage de volumes pour persistence
-- Logs centralisés
-- Facile de scale les workers
-
-```yaml
-# Exemple docker-compose.yml simplifié
-version: '3.8'
-services:
-  spark-master:
-    image: bitnami/spark:latest
-    environment:
-      - SPARK_MODE=master
-    ports:
-      - "8080:8080"
-  
-  spark-worker:
-    image: bitnami/spark:latest
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-    depends_on:
-      - spark-master
-    deploy:
-      replicas: 3  # Lancer 3 workers
-```
+* **Ingérant automatiquement** les données via Kafka.
+* **Traitant les flux** avec Spark Streaming.
+* **Persistant les résultats** dans PostgreSQL. 
+* **Exposant un dashboard** interactif pour l'analyse.
 
 ---
 
-### 📊 Architecture modulaire et scalable
+## 🏗️ **Architecture du pipeline**
 
-Une structure de code bien organisée pour la maintenabilité :
+1. **Producer (Ingestion)**
 
-#### **Modularité**
-- **Séparation des responsabilités** : Chaque module a une fonction clairement définie
-- **Réutilisabilité** : Code packagé dans des bibliothèques (`libs/`)
-- **Testabilité** : Code découplé facile à tester unitairement
-- **Extensibilité** : Ajouter facilement de nouvelles fonctionnalités
+   * Récupération des données depuis l'API OpenFood. 
+   * Publication des messages dans Kafka.
+   * Configuration du batch et de l'offset.
 
-#### **Scalabilité horizontale**
-- Ajouter des Spark Workers sans modification du code
-- Distribution automatique des charges
-- Parallélisation des transformations
-- RDD/DataFrame partitionnés efficacement
+2. **Kafka (Message Broker)**
 
-#### **Scalabilité verticale**
-- Augmenter les ressources (CPU, RAM) par conteneur
-- Configuration flexible des paramètres Spark
-- Tuning des partitions et du batch interval
+   * Gestion du flux de données en temps réel. 
+   * Coordination via ZooKeeper.
+   * Garantie de délivrance des messages.
 
----
+3. **Consumer (Traitement Spark)**
 
-### 🔄 Support multi-langage (Scala + Python)
+   * Lecture des messages Kafka.
+   * Transformation et nettoyage des données.
+   * Agrégations et calculs en temps réel. 
+   * Écriture dans PostgreSQL.
 
-Exploite les forces de deux langages :
+4. **PostgreSQL (Stockage)**
 
-#### **Pourquoi Scala ?**
-- **Performance** : Compilé, typé statiquement (plus rapide que Python)
-- **Naturellement parallèle** : Immutabilité, pas de race conditions
-- **DSL expressif** : API Spark très naturelle en Scala
-- **Type-safe** : Erreurs détectées à la compilation
+   * Persistance des données traitées.
+   * Base de données `openfood`.
+   * Scripts d'initialisation automatiques.
 
-#### **Pourquoi Python ?**
-- **Développement rapide** : Syntaxe simple et productive
-- **Écosystème data science** : Pandas, NumPy, SciPy, Scikit-learn
-- **Data scientists friendly** : Langage préféré des analystes
-- **Intégrations faciles** : APIs, webhooks, services cloud
+5. **Streamlit (Visualisation)**
 
-#### **Interopérabilité**
-- Scala pour les jobs Spark haute-performance
-- Python pour l'orchestration et la visualisation
-- Communication via fichiers (Parquet), API REST, ou messages
-- Partage de données via DataFrames
+   * Dashboard interactif. 
+   * Graphiques et métriques en temps réel.
+   * Connexion directe à PostgreSQL.
 
-```scala
-// Job Scala haute-performance
-object StreamingJob {
-  def main(args: Array[String]) {
-    val ssc = new StreamingContext(sc, Seconds(1))
-    val dstream = ssc.socketTextStream("localhost", 9999)
-    dstream.map(_.split(" "))
-      .map(words => (words(0), 1))
-      .reduceByKey(_ + _)
-      .saveAsTextFiles("hdfs://path/output")
-    ssc.start()
-  }
-}
-```
+6. **Docker & Infrastructure**
 
-```python
-# Orchestration Python
-import subprocess
-import pandas as pd
-
-# Soumettre le job Scala
-subprocess.run([
-    "spark-submit",
-    "--class", "com.example.StreamingJob",
-    "target/spark-project.jar"
-])
-
-# Analyser les résultats
-results = pd.read_parquet("hdfs://path/output")
-print(results.describe())
-```
+   * Orchestration multi-conteneurs via Docker Compose.
+   * Réseaux isolés (backend-net, frontend-net). 
+   * Volumes persistants pour les données.
 
 ---
 
-## 📦 Stack technologique
+## 🛠️ **Technologies utilisées**
 
-| Technologie | Pourcentage | Utilisation |
-|---|---|---|
-| **Scala** | 54.6% | Traitement de données et logique métier |
-| **Python** | 29.3% | Scripts d'orchestration et visualisation |
-| **Docker** | 16.1% | Containerisation et déploiement |
+**Langages :**
+
+* Scala (54. 6%)
+* Python (29.3%)
+* Docker (16.1%)
+
+**Traitement de données :**
+
+* Apache Spark 3.5.5
+* Spark Streaming
+* Spark SQL
+
+**Message Broker :**
+
+* Apache Kafka
+* Apache ZooKeeper
+
+**Base de données :**
+
+* PostgreSQL 15
+
+**Visualisation :**
+
+* Streamlit
+* Plotly / Matplotlib
+
+**Infra & DevOps :**
+
+* Docker & Docker Compose
+* Maven
+* Git
 
 ---
 
-## 📁 Structure du projet
+## 📚 **Compétences mobilisées**
+
+### **Big Data & Streaming**
+
+* Apache Spark Streaming
+* Micro-batching
+* Fenêtrage temporel (sliding/tumbling windows)
+* Stateful processing
+* Kafka integration
+
+### **Data Engineering**
+
+* Ingestion de données API
+* ETL en temps réel
+* Structuration SQL
+* Pipelines de traitement distribués
+
+### **Backend & DevOps**
+
+* Architecture microservices
+* Containerisation Docker
+* Orchestration Docker Compose
+* Configuration infrastructure
+
+---
+
+## 🚀 **Fonctionnalités principales**
+
+* Collecte automatique de données depuis l'API OpenFood. 
+* Traitement en temps réel avec Spark Streaming.
+* Stockage persistant dans PostgreSQL.
+* Dashboard Streamlit interactif.
+* Infrastructure complète containerisée. 
+* Scalabilité horizontale des workers Spark.
+
+---
+
+## 📂 **Structure du projet**
 
 ```
 Spark-Streaming-Project/
 ├── src/
-│   ├── main/
-│   │   ├── scala/              # Code Scala principal
-│   │   │   └── com/example/
-│   │   │       ├── streaming/  # Jobs Spark Streaming
-│   │   │       ├── utils/      # Utilitaires
-│   │   │       └── config/     # Configuration
-│   │   └── resources/          # Fichiers de config (YAML, properties)
-│   └── test/
-│       ├── scala/              # Tests unitaires Scala
-│       └── python/             # Tests Python
-├── streamlit/                  # Applications Streamlit
-│   ├── app.py                  # Dashboards interactifs
-│   └── components/             # Composants réutilisables
-├── Infra/                      # Configuration infrastructure
-│   ├── terraform/              # Infrastructure as Code
-│   └── ansible/                # Configuration management
-├── libs/                       # Bibliothèques partagées
-│   ├── common/                 # Code commun
-│   └── validators/             # Validateurs
-├── pom.xml                     # Configuration Maven
-├── docker-compose.yml          # Orchestration Docker
-├── Dockerfile                  # Image Docker personnalisée
-└── ReadMe.md                   # Documentation
+│   └── main/
+│       └── scala/
+│           └── com/esgi/
+│               ├── Producer/          # Producer Kafka
+│               │   └── Dockerfile
+│               └── Consumer/          # Consumer Spark Streaming
+│                   └── Dockerfile
+├── streamlit/                         # Application Streamlit
+│   ├── app.py                         # Dashboard principal
+│   ├── Dockerfile
+│   └── requirements.txt
+├── Infra/                             # Configuration infrastructure
+│   ├── kafka/                         # Configuration Kafka
+│   ├── postgres/                      # Scripts SQL d'initialisation
+│   │   └── init.sql
+│   ├── zookeeper/                     # Configuration ZooKeeper
+│   └── docker-compose.yml             # Compose infrastructure
+├── libs/                              # Bibliothèques partagées
+├── data/                              # Données locales
+├── pom.xml                            # Configuration Maven
+├── docker-compose.yml                 # Orchestration principale
+├── Dockerfile
+└── README.md
 ```
 
 ---
 
-## 🛠️ Installation et mise en place
+## ▶️ **Installation & Exécution**
 
-### Prérequis
-
-- Docker et Docker Compose (v1.29+)
-- Apache Spark 3.x
-- Scala 2.12+
-- Python 3.8+
-- Maven 3.6+
-- Git
-
-### Démarrage rapide avec Docker Compose
+### 1.  Cloner le projet
 
 ```bash
-# Cloner le repository
-git clone https://github.com/WassimTorjmen/Spark-Streaming-Project.git
+git clone https://github.com/WassimTorjmen/Spark-Streaming-Project. git
 cd Spark-Streaming-Project
-
-# Démarrer l'environnement complet
-docker-compose up -d
-
-# Vérifier le status
-docker-compose ps
-
-# Voir les logs
-docker-compose logs -f spark-master
 ```
 
-### Installation locale
+### 2. Démarrer l'environnement complet
 
 ```bash
-# Installer les dépendances Maven
-mvn clean install
+docker-compose up -d
+```
 
-# Compiler le projet
-mvn package
+### 3. Vérifier le statut des services
 
-# Exécuter un job Spark
-spark-submit --class com.example.streaming.StreamingApp \
-  target/spark-streaming-1.0.jar
+```bash
+docker-compose ps
+```
+
+### 4. Voir les logs
+
+```bash
+# Logs du producer
+docker-compose logs -f producer
+
+# Logs du consumer
+docker-compose logs -f consumer
+
+# Logs Kafka
+docker-compose logs -f kafka
+```
+
+### 5.  Accéder au dashboard Streamlit
+
+👉 [http://localhost:8501](http://localhost:8501)
+
+### 6. Accéder à PostgreSQL
+
+```bash
+psql -h localhost -p 5433 -U ingest -d openfood
+# Mot de passe : ingestpwd
 ```
 
 ---
 
-## 📊 Performances et optimisations
+## 🏗️ **Architecture Docker**
 
-- **Partitionnement intelligent** : Optimisation du nombre de partitions
-- **Batch interval tuning** : Équilibre latence vs throughput
-- **RDD caching** : Optimisation des opérations répétées
-- **Compression de données** : Réduction de l'utilisation mémoire
-- **Parallélisme adaptatif** : Auto-tuning des ressources
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Docker Compose Orchestration                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────────┐  ┌──────────────────────┐            │
+│  │ ZooKeeper        │  │ Kafka                │            │
+│  │ - Port 2181      │◄─│ - Port 9092          │            │
+│  └──────────────────┘  └──────────────────────┘            │
+│                              │                              │
+│           ┌──────────────────┼──────────────────┐          │
+│           ▼                  │                  ▼          │
+│  ┌──────────────────┐        │        ┌──────────────────┐ │
+│  │ Producer         │────────┘        │ Consumer (Spark) │ │
+│  │ - API OpenFood   │                 │ - Spark Streaming│ │
+│  └──────────────────┘                 └──────────────────┘ │
+│                                              │              │
+│                                              ▼              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ PostgreSQL                                           │  │
+│  │ - Port 5433                                          │  │
+│  │ - Base: openfood                                     │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                              │                              │
+│                              ▼                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ Streamlit Dashboard                                  │  │
+│  │ - Port 8501                                          │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 📞 Support
+## ⚙️ **Configuration**
 
-Pour toute question, ouvrez une [issue](https://github.com/WassimTorjmen/Spark-Streaming-Project/issues).
+### Variables d'environnement Producer
+
+| Variable | Description | Défaut |
+|----------|-------------|--------|
+| `KAFKA_BOOTSTRAP_SERVERS` | Adresse Kafka | `kafka:9092` |
+| `USE_API` | Utiliser l'API OpenFood | `true` |
+| `BATCH_LENGTH` | Taille du batch | `100` |
+| `MAX_OFFSET` | Offset maximum | `3808300` |
+
+### Variables d'environnement Consumer
+
+| Variable | Description | Défaut |
+|----------|-------------|--------|
+| `KAFKA_BOOTSTRAP_SERVERS` | Adresse Kafka | `kafka:9092` |
+| `PG_URL` | URL PostgreSQL | `jdbc:postgresql://postgres:5432/openfood` |
+| `PG_USER` | Utilisateur PostgreSQL | `ingest` |
+| `PG_PWD` | Mot de passe PostgreSQL | `ingestpwd` |
+| `CHECKPOINT_PATH` | Chemin checkpoint Spark | `/checkpoint/generic` |
 
 ---
 
-**Dernière mise à jour** : 26 novembre 2025
+## 📊 **Exemple de flux de données**
+
+### Input (données API OpenFood)
+
+```json
+{
+  "product_name": "Nutella",
+  "brands": "Ferrero",
+  "categories": "Pâtes à tartiner",
+  "nutriscore_grade": "e",
+  "energy_100g": 2252
+}
+```
+
+### Traitement Spark
+
+```scala
+// Lecture depuis Kafka
+val stream = spark.readStream
+  .format("kafka")
+  .option("subscribe", "openfood-topic")
+  .load()
+
+// Transformation et agrégation
+val processed = stream
+  .select(from_json(col("value"), schema).as("data"))
+  .groupBy("data.nutriscore_grade")
+  . count()
+```
+
+### Résultat PostgreSQL
+
+| nutriscore_grade | count |
+|------------------|-------|
+| a | 15234 |
+| b | 28451 |
+| c | 34123 |
+| d | 21098 |
+| e | 12456 |
+
+---
+
+## 🧪 **Tests**
+
+### Compilation Maven
+
+```bash
+mvn clean install
+mvn package
+```
+
+### Test de connectivité Kafka
+
+```bash
+docker exec -it kafka kafka-topics. sh --list --bootstrap-server localhost:9092
+```
+
+### Test PostgreSQL
+
+```bash
+docker exec -it postgres psql -U ingest -d openfood -c "SELECT COUNT(*) FROM products;"
+```
+
+---
+
+## 📈 **Performances et optimisations**
+
+* **Partitionnement Kafka** : Distribution optimale des messages. 
+* **Checkpointing Spark** : Récupération en cas de défaillance.
+* **Batch interval tuning** : Équilibre latence vs throughput.
+* **Connection pooling** : Optimisation des connexions PostgreSQL. 
+* **Volumes Docker** : Persistance des données et logs.
+
+---
+
+## 📞 **Support**
+
+Pour toute question, ouvrez une [issue](https://github.com/WassimTorjmen/Spark-Streaming-Project/issues). 
+
+---
+
+## 👤 **Auteur**
+
+**Wassim Torjmen**
+
+---
+
+**Dernière mise à jour** : Décembre 2025
